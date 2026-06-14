@@ -17,8 +17,14 @@ export function rewriteM3U8(text: string, baseUrl: string): string {
 }
 
 router.get('/', async (req: Request, res: Response) => {
-  const url = req.query.url as string;
+  const url = typeof req.query.url === 'string' ? req.query.url : undefined;
   if (!url) return res.status(400).json({ error: 'url query param required' });
+
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    return res.status(400).json({ error: 'url must use http or https scheme' });
+  }
+
+  res.set('Access-Control-Allow-Origin', '*');
 
   try {
     const upstream = await fetch(url, { signal: AbortSignal.timeout(15_000) });
@@ -29,8 +35,6 @@ router.get('/', async (req: Request, res: Response) => {
 
     const contentType = upstream.headers.get('content-type') ?? '';
     const isM3U8 = url.includes('.m3u8') || contentType.includes('mpegurl');
-
-    res.set('Access-Control-Allow-Origin', '*');
 
     if (isM3U8) {
       const text = await upstream.text();
