@@ -38,4 +38,20 @@ describe('parseM3U', () => {
     const input = '#EXTM3U\n#EXTINF:-1,NoStream';
     expect(parseM3U(input)).toHaveLength(0);
   });
+
+  it('handles Windows line endings (CRLF)', () => {
+    const crlf = SAMPLE.replace(/\n/g, '\r\n');
+    const result = parseM3U(crlf);
+    expect(result).toHaveLength(2);
+    expect(result[0].name).toBe('Al Jazeera');
+    expect(result[0].url).toBe('http://stream.aljazeera.net/live.m3u8');
+  });
+
+  it('preserves commas in channel names', () => {
+    const input = `#EXTM3U
+#EXTINF:-1 tvg-id="cnn" group-title="News",CNN, International
+http://cnn.stream.url/live.m3u8`;
+    const [ch] = parseM3U(input);
+    expect(ch.name).toBe('CNN, International');
+  });
 });

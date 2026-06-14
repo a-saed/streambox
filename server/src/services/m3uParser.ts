@@ -15,7 +15,7 @@ export function parseM3U(text: string): Channel[] {
     const country  = line.match(/tvg-country="([^"]*)"/)?.[1] ?? '';
     const language = line.match(/tvg-language="([^"]*)"/)?.[1] ?? '';
     const tvgUrl   = line.match(/tvg-url="([^"]*)"/)?.[1] || undefined;
-    const name     = line.match(/,([^,]+)$/)?.[1]?.trim() ?? 'Unknown';
+    const name     = line.match(/,(.+)$/)?.[1]?.trim() ?? 'Unknown';
 
     // Find next non-empty, non-comment line as the stream URL
     let url = '';
