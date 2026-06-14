@@ -3,10 +3,8 @@ import { Slider } from '@/components/ui/slider';
 import { useStore } from '../store/useStore';
 
 export function OverlayControls() {
-  const { activeChannel, toggleSidebar } = useStore((s) => ({
-    activeChannel: s.activeChannel,
-    toggleSidebar: s.toggleSidebar,
-  }));
+  const activeChannel = useStore((s) => s.activeChannel);
+  const toggleSidebar = useStore((s) => s.toggleSidebar);
 
   const [visible, setVisible] = useState(true);
   const [volume, setVolume]   = useState(80);

@@ -13,10 +13,8 @@ function getCurrentAndNext(entries: EPGEntry[]): { current: EPGEntry | null; nex
 }
 
 export function EPGStrip() {
-  const { activeChannel, epg } = useStore((s) => ({
-    activeChannel: s.activeChannel,
-    epg: s.epg,
-  }));
+  const activeChannel = useStore((s) => s.activeChannel);
+  const epg = useStore((s) => s.epg);
 
   if (!activeChannel) return null;
 

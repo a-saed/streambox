@@ -6,10 +6,8 @@ interface CategoryTabsProps {
 }
 
 export function CategoryTabs({ categories }: CategoryTabsProps) {
-  const { category, setCategory } = useStore((s) => ({
-    category: s.category,
-    setCategory: s.setCategory,
-  }));
+  const category = useStore((s) => s.category);
+  const setCategory = useStore((s) => s.setCategory);
 
   return (
     <div className="overflow-x-auto">

@@ -19,10 +19,8 @@ interface ChannelRowProps extends ChannelRowExtraProps {
 }
 
 function ChannelRow({ index, style, channels, ariaAttributes }: ChannelRowProps) {
-  const { activeChannel, setActiveChannel } = useStore((s) => ({
-    activeChannel: s.activeChannel,
-    setActiveChannel: s.setActiveChannel,
-  }));
+  const activeChannel = useStore((s) => s.activeChannel);
+  const setActiveChannel = useStore((s) => s.setActiveChannel);
   const ch = channels[index];
   const isActive = activeChannel?.url === ch.url;
 

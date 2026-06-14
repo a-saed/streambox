@@ -7,11 +7,9 @@ import { useStore } from './store/useStore';
 import { fetchChannels, fetchEPG } from './lib/api';
 
 export default function App() {
-  const { setChannels, setEpg, activeChannel } = useStore((s) => ({
-    setChannels: s.setChannels,
-    setEpg: s.setEpg,
-    activeChannel: s.activeChannel,
-  }));
+  const setChannels = useStore((s) => s.setChannels);
+  const setEpg = useStore((s) => s.setEpg);
+  const activeChannel = useStore((s) => s.activeChannel);
 
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading]       = useState(true);

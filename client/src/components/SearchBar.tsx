@@ -2,10 +2,8 @@ import { Input } from '@/components/ui/input';
 import { useStore } from '../store/useStore';
 
 export function SearchBar() {
-  const { searchQuery, setSearchQuery } = useStore((s) => ({
-    searchQuery: s.searchQuery,
-    setSearchQuery: s.setSearchQuery,
-  }));
+  const searchQuery = useStore((s) => s.searchQuery);
+  const setSearchQuery = useStore((s) => s.setSearchQuery);
 
   return (
     <Input
