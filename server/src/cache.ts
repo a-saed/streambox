@@ -38,6 +38,7 @@ async function fetchAndCacheEPG(): Promise<void> {
 async function fetchAndCacheChannels(): Promise<void> {
   try {
     const res = await fetch(M3U_URL, { signal: AbortSignal.timeout(30_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     channels = parseM3U(text);
     categories = [...new Set(channels.map(c => c.category))].sort();
