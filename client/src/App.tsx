@@ -20,10 +20,12 @@ export default function App() {
   useEffect(() => {
     async function load() {
       try {
-        const { channels, categories: cats } = await fetchChannels();
+        const [{ channels, categories: cats }, epgData] = await Promise.all([
+          fetchChannels(),
+          fetchEPG(),
+        ]);
         setChannels(channels);
         setCategories(cats);
-        const epgData = await fetchEPG();
         setEpg(epgData);
       } catch {
         setError('Could not connect to the backend. Make sure the server is running on port 3001.');

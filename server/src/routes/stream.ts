@@ -1,5 +1,18 @@
 import { Router, Request, Response } from 'express';
 import { Readable } from 'stream';
+import { promises as dns } from 'dns';
+
+const PRIVATE_IP = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|169\.254\.|::1|fc|fd)/i;
+
+async function isPrivateUrl(url: string): Promise<boolean> {
+  try {
+    const hostname = new URL(url).hostname;
+    const { address } = await dns.lookup(hostname);
+    return PRIVATE_IP.test(address);
+  } catch {
+    return true; // block if lookup fails
+  }
+}
 
 const router = Router();
 
@@ -22,6 +35,10 @@ router.get('/', async (req: Request, res: Response) => {
 
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
     return res.status(400).json({ error: 'url must use http or https scheme' });
+  }
+
+  if (await isPrivateUrl(url)) {
+    return res.status(400).json({ error: 'requests to private addresses are not allowed' });
   }
 
   res.set('Access-Control-Allow-Origin', '*');

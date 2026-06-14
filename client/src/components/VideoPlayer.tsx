@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import type { Channel } from '../types';
 import { proxyStreamUrl } from '../lib/api';
@@ -10,8 +10,10 @@ interface VideoPlayerProps {
 export function VideoPlayer({ channel }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef   = useRef<Hls | null>(null);
+  const [streamError, setStreamError] = useState(false);
 
   useEffect(() => {
+    setStreamError(false);
     const video = videoRef.current;
     if (!video || !channel) return;
 
@@ -27,6 +29,9 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         video.play().catch(() => {});
+      });
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (data.fatal) setStreamError(true);
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = src;
@@ -51,11 +56,22 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
   }
 
   return (
-    <video
-      ref={videoRef}
-      className="h-full w-full object-contain bg-black"
-      autoPlay
-      playsInline
-    />
+    <>
+      {streamError && (
+        <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/80 z-10">
+          <div className="text-center space-y-2">
+            <div className="text-3xl">⚠️</div>
+            <p className="text-zinc-400 text-sm">Stream unavailable</p>
+            <p className="text-zinc-600 text-xs">Try another channel</p>
+          </div>
+        </div>
+      )}
+      <video
+        ref={videoRef}
+        className="h-full w-full object-contain bg-black"
+        autoPlay
+        playsInline
+      />
+    </>
   );
 }
