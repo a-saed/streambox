@@ -19,7 +19,7 @@ export function CategoryTabs({ categories }: CategoryTabsProps) {
             <TabsTrigger
               key={cat}
               value={cat}
-              className="text-xs px-3 h-6 rounded text-zinc-400 data-[state=active]:bg-zinc-600 data-[state=active]:text-white"
+              className="text-xs px-3 h-6 rounded text-zinc-400 data-active:bg-zinc-600 data-active:text-white"
             >
               {cat}
             </TabsTrigger>
