@@ -1,27 +1,35 @@
-import { FixedSizeList as List } from 'react-window';
-import AutoSizer from 'react-virtualized-auto-sizer';
+import { List } from 'react-window';
 import { useStore } from '../store/useStore';
 import type { Channel } from '../types';
 
 const ITEM_HEIGHT = 60;
 
-interface RowProps {
-  index: number;
-  style: React.CSSProperties;
-  data: Channel[];
+interface ChannelRowExtraProps {
+  channels: Channel[];
 }
 
-function ChannelRow({ index, style, data }: RowProps) {
+interface ChannelRowProps extends ChannelRowExtraProps {
+  ariaAttributes: {
+    'aria-posinset': number;
+    'aria-setsize': number;
+    role: 'listitem';
+  };
+  index: number;
+  style: React.CSSProperties;
+}
+
+function ChannelRow({ index, style, channels, ariaAttributes }: ChannelRowProps) {
   const { activeChannel, setActiveChannel } = useStore((s) => ({
     activeChannel: s.activeChannel,
     setActiveChannel: s.setActiveChannel,
   }));
-  const ch = data[index];
+  const ch = channels[index];
   const isActive = activeChannel?.url === ch.url;
 
   return (
     <div
       style={style}
+      {...ariaAttributes}
       onClick={() => setActiveChannel(ch)}
       className={`flex items-center gap-3 px-3 cursor-pointer transition-colors hover:bg-zinc-700/50 ${
         isActive ? 'bg-zinc-700/80 ring-1 ring-inset ring-indigo-500/60' : ''
@@ -59,20 +67,14 @@ export function ChannelList() {
   }
 
   return (
-    <div className="flex-1 min-h-0">
-      <AutoSizer>
-        {({ height, width }: { height: number; width: number }) => (
-          <List
-            height={height}
-            width={width}
-            itemCount={filtered.length}
-            itemSize={ITEM_HEIGHT}
-            itemData={filtered}
-          >
-            {ChannelRow}
-          </List>
-        )}
-      </AutoSizer>
+    <div className="flex-1 min-h-0" style={{ overflow: 'hidden' }}>
+      <List<ChannelRowExtraProps>
+        style={{ height: '100%', width: '100%' }}
+        rowCount={filtered.length}
+        rowHeight={ITEM_HEIGHT}
+        rowComponent={ChannelRow}
+        rowProps={{ channels: filtered }}
+      />
     </div>
   );
 }
