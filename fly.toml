@@ -2,7 +2,7 @@ app = "streambox-server"
 primary_region = "iad"
 
 [build]
-  dockerfile = "server/Dockerfile"
+  dockerfile = "Dockerfile"
 
 [env]
   PORT = "3001"
