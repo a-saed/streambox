@@ -39,13 +39,12 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
     video.addEventListener('playing', onPlaying);
 
     function loadWithMpegts(tsUrl: string) {
-      if (!mpegts.getFeatureList().mseLivePlayback) {
+      if (!video || !mpegts.getFeatureList().mseLivePlayback) {
         setStatus('error');
         return;
       }
       mpegtsRef.current?.destroy();
       mpegtsRef.current = null;
-      // Reset video element so previous player state doesn't linger
       video.removeAttribute('src');
       video.load();
 

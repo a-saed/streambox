@@ -67,7 +67,7 @@ export async function getMatches(): Promise<Match[]> {
       return cache.matches;
     }
 
-    const data = await res.json();
+    const data = await res.json() as { matches?: any[] };
     const raw: any[] = data.matches ?? [];
 
     const enriched: Match[] = raw.map(m => ({

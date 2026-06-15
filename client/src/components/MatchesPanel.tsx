@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Tv2, RefreshCw } from 'lucide-react';
 import { fetchMatches } from '../lib/api';
-import { useStore } from '../store/useStore';
 import type { Match } from '../types';
 
 function formatTime(utcDate: string): string {
