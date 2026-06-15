@@ -5,10 +5,11 @@ import { initCache } from './cache';
 const PORT = process.env.PORT ?? 3001;
 
 async function start() {
-  await initCache();
+  // Listen immediately so fly.io health checks pass; cache warms in background
   const server = app.listen(PORT, () =>
     console.log(`[server] Listening on http://localhost:${PORT}`)
   );
+  initCache().catch(err => console.error('[cache] Init failed:', err));
 
   const shutdown = () => {
     server.closeAllConnections(); // destroy open sockets immediately (Node 18.2+)
