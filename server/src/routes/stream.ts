@@ -150,6 +150,7 @@ router.get('/', async (req: Request, res: Response) => {
     console.log(`[stream] binary media ct="${contentType}"`);
 
     res.set('Content-Type', contentType);
+    res.set('Cache-Control', 'no-cache, no-store');
 
     // Forward range-response headers so hls.js can seek correctly
     const contentRange  = upstream.headers.get('content-range');

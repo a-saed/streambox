@@ -9,14 +9,23 @@ interface VideoPlayerProps {
 }
 
 export function VideoPlayer({ channel }: VideoPlayerProps) {
-  const videoRef    = useRef<HTMLVideoElement>(null);
-  const hlsRef      = useRef<Hls | null>(null);
-  const mpegtsRef   = useRef<mpegts.Player | null>(null);
-  const recoveryRef = useRef({ network: 0, media: 0 });
+  const videoRef         = useRef<HTMLVideoElement>(null);
+  const hlsRef           = useRef<Hls | null>(null);
+  const mpegtsRef        = useRef<mpegts.Player | null>(null);
+  const recoveryRef      = useRef({ network: 0, media: 0 });
+  const autoRetryRef     = useRef(0);
+  const retryTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stallIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevChannelUrl   = useRef<string | null>(null);
 
   const [status, setStatus]       = useState<'loading' | 'playing' | 'error'>('loading');
   const [buffering, setBuffering] = useState(false);
   const [retryKey, setRetryKey]   = useState(0);
+
+  const handleManualRetry = () => {
+    autoRetryRef.current = 0; // manual retry resets the counter
+    setRetryKey(k => k + 1);
+  };
 
   useEffect(() => {
     const video = videoRef.current;
@@ -26,10 +35,17 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
     setBuffering(false);
     recoveryRef.current = { network: 0, media: 0 };
 
-    hlsRef.current?.destroy();
-    hlsRef.current = null;
-    mpegtsRef.current?.destroy();
-    mpegtsRef.current = null;
+    // Reset auto-retry counter only when the channel actually changes, not on retry
+    if (prevChannelUrl.current !== channel.url) {
+      prevChannelUrl.current = channel.url;
+      autoRetryRef.current = 0;
+    }
+
+    if (retryTimerRef.current)    { clearTimeout(retryTimerRef.current);     retryTimerRef.current    = null; }
+    if (stallIntervalRef.current) { clearInterval(stallIntervalRef.current); stallIntervalRef.current = null; }
+
+    hlsRef.current?.destroy();     hlsRef.current    = null;
+    mpegtsRef.current?.destroy();  mpegtsRef.current = null;
 
     const url = channel.url;
 
@@ -38,11 +54,40 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
     video.addEventListener('waiting', onWaiting);
     video.addEventListener('playing', onPlaying);
 
-    function loadWithMpegts(tsUrl: string) {
-      if (!video || !mpegts.getFeatureList().mseLivePlayback) {
-        setStatus('error');
-        return;
+    // Auto-retry with backoff before giving up and showing the error screen
+    function scheduleAutoRetry() {
+      if (autoRetryRef.current >= 3) { setStatus('error'); return; }
+      autoRetryRef.current++;
+      retryTimerRef.current = setTimeout(
+        () => setRetryKey(k => k + 1),
+        autoRetryRef.current * 3_000, // 3 s → 6 s → 9 s
+      );
+    }
+
+    // Stall detector: if currentTime hasn't advanced for 5 s while video is "playing",
+    // the stream silently froze. Try to recover without showing an error to the user.
+    let lastTime  = -1;
+    let stallTicks = 0;
+    stallIntervalRef.current = setInterval(() => {
+      if (video.paused || video.ended || video.readyState < 2) return;
+      if (video.currentTime > 0 && video.currentTime === lastTime) {
+        if (++stallTicks >= 5) {
+          stallTicks = 0;
+          lastTime   = -1;
+          if (hlsRef.current) {
+            hlsRef.current.startLoad(); // gentle recovery: restart segment loading
+          } else {
+            scheduleAutoRetry();        // mpegts: full stream reload
+          }
+        }
+      } else {
+        lastTime   = video.currentTime;
+        stallTicks = 0;
       }
+    }, 1_000);
+
+    function loadWithMpegts(tsUrl: string) {
+      if (!video || !mpegts.getFeatureList().mseLivePlayback) { scheduleAutoRetry(); return; }
       mpegtsRef.current?.destroy();
       mpegtsRef.current = null;
       video.removeAttribute('src');
@@ -52,12 +97,17 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
       const absoluteUrl = new URL(tsUrl, window.location.origin).href;
       const player = mpegts.createPlayer(
         { type: 'mpegts', url: absoluteUrl, isLive: true },
-        { enableWorker: true },
+        {
+          enableWorker: true,
+          autoCleanupSourceBuffer: true,        // prevent buffer overflow → stalls
+          autoCleanupMinBackwardDuration: 10,
+          autoCleanupMaxBackwardDuration: 20,
+        },
       );
       mpegtsRef.current = player;
       player.on(mpegts.Events.ERROR, (errType, errDetail) => {
         console.error('[mpegts] error', errType, errDetail);
-        setStatus('error');
+        scheduleAutoRetry();
       });
       player.attachMediaElement(video);
       player.load();
@@ -71,14 +121,25 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
         enableWorker: true,
         lowLatencyMode: false,
         startLevel: -1,
-        maxBufferLength: 30,
-        fragLoadingTimeOut: 20_000,
-        manifestLoadingTimeOut: 15_000,
-        levelLoadingTimeOut: 15_000,
+
+        // Live TV: no back-buffer needed (can't rewind) → less memory pressure
+        maxBufferLength: 20,
+        backBufferLength: 0,
+
+        // Stay close to live edge; jump forward if too far behind
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 8,
+
+        // Faster retry on network blips
+        fragLoadingTimeOut: 15_000,
+        manifestLoadingTimeOut: 10_000,
+        levelLoadingTimeOut: 10_000,
         fragLoadingMaxRetry: 6,
         manifestLoadingMaxRetry: 4,
         levelLoadingMaxRetry: 4,
-        fragLoadingRetryDelay: 1_000,
+        fragLoadingRetryDelay: 500,
+        manifestLoadingRetryDelay: 500,
+        levelLoadingRetryDelay: 500,
       });
       hlsRef.current = hls;
       hls.loadSource(proxyStreamUrl(url));
@@ -114,11 +175,11 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
           if (r.media === 0) { r.media++; hls.recoverMediaError(); return; }
           if (r.media === 1) { r.media++; hls.swapAudioCodec(); hls.recoverMediaError(); return; }
         }
-        setStatus('error');
+        scheduleAutoRetry();
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = proxyStreamUrl(url);
-      video.addEventListener('error', () => setStatus('error'), { once: true });
+      video.addEventListener('error', () => scheduleAutoRetry(), { once: true });
       video.play().catch(() => {});
     } else {
       setStatus('error');
@@ -127,10 +188,10 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
     return () => {
       video.removeEventListener('waiting', onWaiting);
       video.removeEventListener('playing', onPlaying);
-      hlsRef.current?.destroy();
-      hlsRef.current = null;
-      mpegtsRef.current?.destroy();
-      mpegtsRef.current = null;
+      if (retryTimerRef.current)    clearTimeout(retryTimerRef.current);
+      if (stallIntervalRef.current) clearInterval(stallIntervalRef.current);
+      hlsRef.current?.destroy();    hlsRef.current    = null;
+      mpegtsRef.current?.destroy(); mpegtsRef.current = null;
     };
   }, [channel, retryKey]);
 
@@ -175,7 +236,7 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
             <div className="text-3xl">⚠️</div>
             <p className="text-zinc-400 text-sm">Stream unavailable</p>
             <button
-              onClick={() => setRetryKey(k => k + 1)}
+              onClick={handleManualRetry}
               className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded transition-colors"
             >
               Retry
