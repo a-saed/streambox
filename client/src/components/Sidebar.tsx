@@ -45,7 +45,7 @@ export function Sidebar({ categories }: SidebarProps) {
       )}
 
       <aside
-        className={`absolute left-0 top-0 h-full z-20 flex flex-col w-full sm:w-72
+        className={`absolute left-0 top-0 h-full z-20 flex flex-col w-72
           backdrop-blur-md bg-zinc-900/85 border-r border-zinc-800/60
           transition-transform duration-300 ease-in-out
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
