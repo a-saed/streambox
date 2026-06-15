@@ -93,7 +93,8 @@ export function OverlayControls() {
   };
 
   const VolumeIcon = muted || volume === 0 ? VolumeX : volume < 50 ? Volume1 : Volume2;
-  const offset = sidebarOpen ? 'left-72' : 'left-0';
+  // On mobile the sidebar is full-width so no offset needed; only shift on sm+
+  const offset = sidebarOpen ? 'sm:left-72' : '';
 
   return (
     <div
@@ -109,10 +110,10 @@ export function OverlayControls() {
       >
         <button
           onClick={toggleSidebar}
-          className="text-white/80 hover:text-white transition-colors"
+          className="text-white/80 hover:text-white transition-colors p-2 -m-2"
           aria-label="Toggle sidebar"
         >
-          <Menu size={20} />
+          <Menu size={22} />
         </button>
         <span className="text-white/90 font-medium text-sm tracking-wide truncate">
           {activeChannel?.name ?? 'IPTV Player'}
@@ -129,7 +130,7 @@ export function OverlayControls() {
         <div className="flex items-center gap-3 bg-black/50 backdrop-blur-md rounded-xl px-4 py-2.5">
           <button
             onClick={togglePlay}
-            className="text-white hover:text-white/70 transition-colors"
+            className="text-white hover:text-white/70 transition-colors p-1 sm:p-0"
             aria-label={playing ? 'Pause' : 'Play'}
           >
             {playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
@@ -139,24 +140,26 @@ export function OverlayControls() {
 
           <button
             onClick={toggleMute}
-            className="text-white/80 hover:text-white transition-colors"
+            className="text-white/80 hover:text-white transition-colors p-1 sm:p-0"
             aria-label={muted ? 'Unmute' : 'Mute'}
           >
             <VolumeIcon size={18} />
           </button>
 
-          <Slider
-            value={[muted ? 0 : volume]}
-            onValueChange={(val: number | readonly number[]) => {
-              const v = Array.isArray(val) ? (val as readonly number[])[0] : (val as number);
-              setVolume(v);
-              if (v > 0) setMuted(false);
-            }}
-            min={0}
-            max={100}
-            step={1}
-            className="w-24 flex-shrink-0"
-          />
+          <div className="hidden sm:flex items-center gap-3">
+            <Slider
+              value={[muted ? 0 : volume]}
+              onValueChange={(val: number | readonly number[]) => {
+                const v = Array.isArray(val) ? (val as readonly number[])[0] : (val as number);
+                setVolume(v);
+                if (v > 0) setMuted(false);
+              }}
+              min={0}
+              max={100}
+              step={1}
+              className="w-24 flex-shrink-0"
+            />
+          </div>
         </div>
 
         <div className="flex-1" />

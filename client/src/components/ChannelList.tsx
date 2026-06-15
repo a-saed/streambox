@@ -19,8 +19,9 @@ interface ChannelRowProps extends ChannelRowExtraProps {
 }
 
 function ChannelRow({ index, style, channels, ariaAttributes }: ChannelRowProps) {
-  const activeChannel = useStore((s) => s.activeChannel);
+  const activeChannel    = useStore((s) => s.activeChannel);
   const setActiveChannel = useStore((s) => s.setActiveChannel);
+  const setSidebarOpen   = useStore((s) => s.setSidebarOpen);
   const ch = channels[index];
   const isActive = activeChannel?.url === ch.url;
 
@@ -28,7 +29,7 @@ function ChannelRow({ index, style, channels, ariaAttributes }: ChannelRowProps)
     <div
       style={style}
       {...ariaAttributes}
-      onClick={() => setActiveChannel(ch)}
+      onClick={() => { setActiveChannel(ch); setSidebarOpen(false); }}
       className={`flex items-center gap-3 px-3 cursor-pointer transition-colors hover:bg-zinc-700/50 ${
         isActive ? 'bg-zinc-700/80 ring-1 ring-inset ring-indigo-500/60' : ''
       }`}
