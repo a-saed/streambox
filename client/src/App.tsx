@@ -13,9 +13,12 @@ export default function App() {
 
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading]       = useState(true);
-  const [error, setError]           = useState<string | null>(null);
+  const [error, setError]           = useState(false);
+  const [retryKey, setRetryKey]     = useState(0);
 
   useEffect(() => {
+    setLoading(true);
+    setError(false);
     async function load() {
       try {
         const [{ channels, categories: cats }, epgData] = await Promise.all([
@@ -26,20 +29,20 @@ export default function App() {
         setCategories(cats);
         setEpg(epgData);
       } catch {
-        setError('Could not connect to the backend. Make sure the server is running on port 3001.');
+        setError(true);
       } finally {
         setLoading(false);
       }
     }
     load();
-  }, [setChannels, setEpg]);
+  }, [setChannels, setEpg, retryKey]);
 
   if (loading) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-zinc-950">
-        <div className="text-center space-y-3">
-          <div className="text-4xl animate-pulse">📡</div>
-          <p className="text-zinc-400">Loading channels...</p>
+        <div className="text-center space-y-4">
+          <div className="text-5xl animate-pulse">📡</div>
+          <p className="text-zinc-400 text-sm tracking-wide">Loading channels…</p>
         </div>
       </div>
     );
@@ -48,9 +51,23 @@ export default function App() {
   if (error) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-zinc-950">
-        <div className="text-center space-y-2 max-w-sm px-4">
-          <div className="text-4xl">⚠️</div>
-          <p className="text-red-400 text-sm">{error}</p>
+        <div className="text-center space-y-6 max-w-xs px-6">
+          <div className="w-16 h-16 rounded-full bg-zinc-800 flex items-center justify-center mx-auto text-3xl">
+            📡
+          </div>
+          <div className="space-y-2">
+            <p className="text-white font-semibold text-lg">Service unavailable</p>
+            <p className="text-zinc-500 text-sm leading-relaxed">
+              We couldn't reach the streaming service. This is usually temporary — please try again in a moment.
+            </p>
+          </div>
+          <button
+            onClick={() => setRetryKey(k => k + 1)}
+            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700
+              text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            Try again
+          </button>
         </div>
       </div>
     );
