@@ -16,3 +16,20 @@ export interface EPGEntry {
 }
 
 export type EPGSchedule = Record<string, EPGEntry[]>;
+
+export interface MatchTeam {
+  name: string;
+  shortName: string;
+  crest: string;
+}
+
+export interface Match {
+  id: number;
+  competition: { name: string; code: string; emblem: string };
+  homeTeam: MatchTeam;
+  awayTeam: MatchTeam;
+  utcDate: string;
+  status: 'TIMED' | 'SCHEDULED' | 'IN_PLAY' | 'PAUSED' | 'FINISHED' | 'POSTPONED' | 'CANCELLED';
+  score: { fullTime: { home: number | null; away: number | null } };
+  broadcasters: string[];
+}
