@@ -51,19 +51,24 @@ export function OverlayControls() {
     };
   }, [activeChannel]);
 
-  // Sync volume with video
+  // Sync volume/mute with video (video.volume is read-only on iOS — ignore the error)
   useEffect(() => {
     const video = document.querySelector<HTMLVideoElement>('video');
     if (!video) return;
-    video.muted  = muted;
-    video.volume = muted ? 0 : volume / 100;
+    video.muted = muted;
+    try { video.volume = muted ? 0 : volume / 100; } catch { /* iOS ignores volume writes */ }
   }, [volume, muted]);
 
-  // Track fullscreen state
+  // Track fullscreen state (webkit prefix for Safari/iOS)
   useEffect(() => {
-    const onChange = () => setFullscreen(!!document.fullscreenElement);
+    const onChange = () =>
+      setFullscreen(!!(document.fullscreenElement || (document as any).webkitFullscreenElement));
     document.addEventListener('fullscreenchange', onChange);
-    return () => document.removeEventListener('fullscreenchange', onChange);
+    document.addEventListener('webkitfullscreenchange', onChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      document.removeEventListener('webkitfullscreenchange', onChange);
+    };
   }, []);
 
   // Keyboard shortcuts
@@ -85,10 +90,26 @@ export function OverlayControls() {
   const toggleMute = () => setMuted(m => !m);
 
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
+    const video = document.querySelector<HTMLVideoElement>('video');
+    const isFs = !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
+    if (!isFs) {
+      // Standard API (Chrome/Firefox/Android)
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {
+          // Fallback: iOS Safari only supports fullscreen on the video element itself
+          (video as any)?.webkitEnterFullscreen?.();
+        });
+      } else if ((document.documentElement as any).webkitRequestFullscreen) {
+        (document.documentElement as any).webkitRequestFullscreen();
+      } else {
+        (video as any)?.webkitEnterFullscreen?.();
+      }
     } else {
-      document.exitFullscreen().catch(() => {});
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else {
+        (document as any).webkitExitFullscreen?.();
+      }
     }
   };
 
