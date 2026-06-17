@@ -113,8 +113,9 @@ export function OverlayControls() {
     }
   };
 
+  const sidebarWidth = useStore((s) => s.sidebarWidth);
   const VolumeIcon = muted || volume === 0 ? VolumeX : volume < 50 ? Volume1 : Volume2;
-  const offset = sidebarOpen ? 'left-72' : 'left-0';
+  const offset = sidebarOpen ? sidebarWidth : 0;
 
   return (
     <div
@@ -123,10 +124,11 @@ export function OverlayControls() {
     >
       {/* Top bar */}
       <div
-        className={`absolute top-0 right-0 ${offset} pointer-events-auto
+        className="absolute top-0 right-0 pointer-events-auto
           flex items-center gap-3 px-5 py-4
           bg-gradient-to-b from-black/80 to-transparent
-          transition-[left] duration-300`}
+          transition-[left] duration-300"
+        style={{ left: offset }}
       >
         <button
           onClick={toggleSidebar}
@@ -142,9 +144,10 @@ export function OverlayControls() {
 
       {/* Bottom bar — only when a channel is active */}
       {activeChannel && <div
-        className={`absolute bottom-14 right-0 ${offset} pointer-events-auto
+        className="absolute bottom-14 right-0 pointer-events-auto
           flex items-center gap-2 px-5 py-3
-          transition-[left] duration-300`}
+          transition-[left] duration-300"
+        style={{ left: offset }}
       >
         {/* Left cluster: play + volume */}
         <div className="flex items-center gap-3 bg-black/50 backdrop-blur-md rounded-xl px-4 py-2.5">

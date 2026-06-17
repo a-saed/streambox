@@ -39,3 +39,6 @@ client/.vite/
 
 # Test coverage
 coverage/
+
+# SQLite portal database
+server/data/

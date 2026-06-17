@@ -7,6 +7,7 @@ interface AppState {
   activeChannel: Channel | null;
   epg: EPGSchedule;
   sidebarOpen: boolean;
+  sidebarWidth: number;
   category: string;
   searchQuery: string;
 
@@ -15,9 +16,15 @@ interface AppState {
   setActiveChannel: (channel: Channel) => void;
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
+  setSidebarWidth: (w: number) => void;
   setCategory: (category: string) => void;
   setSearchQuery: (query: string) => void;
 }
+
+const _storedWidth = () => {
+  const v = localStorage.getItem('sb-w');
+  return v ? Math.max(220, Math.min(600, parseInt(v, 10))) : 288;
+};
 
 export const useStore = create<AppState>((set, get) => ({
   channels: [],
@@ -25,6 +32,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeChannel: null,
   epg: {},
   sidebarOpen: true,
+  sidebarWidth: _storedWidth(),
   category: 'All',
   searchQuery: '',
 
@@ -35,6 +43,10 @@ export const useStore = create<AppState>((set, get) => ({
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
+  setSidebarWidth: (w) => {
+    localStorage.setItem('sb-w', String(w));
+    set({ sidebarWidth: w });
+  },
 
   setCategory: (category) => {
     const { channels, searchQuery } = get();

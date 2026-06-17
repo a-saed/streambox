@@ -10,13 +10,14 @@ interface VideoPlayerProps {
 
 export function VideoPlayer({ channel }: VideoPlayerProps) {
   const videoRef         = useRef<HTMLVideoElement>(null);
-  const hlsRef           = useRef<Hls | null>(null);
-  const mpegtsRef        = useRef<mpegts.Player | null>(null);
-  const recoveryRef      = useRef({ network: 0, media: 0 });
-  const autoRetryRef     = useRef(0);
-  const retryTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stallIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const prevChannelUrl   = useRef<string | null>(null);
+  const hlsRef            = useRef<Hls | null>(null);
+  const mpegtsRef         = useRef<mpegts.Player | null>(null);
+  const recoveryRef       = useRef({ network: 0, media: 0 });
+  const autoRetryRef      = useRef(0);
+  const retryTimerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stallIntervalRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startupTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevChannelUrl    = useRef<string | null>(null);
 
   const [status, setStatus]       = useState<'loading' | 'playing' | 'error'>('loading');
   const [buffering, setBuffering] = useState(false);
@@ -43,6 +44,7 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
 
     if (retryTimerRef.current)    { clearTimeout(retryTimerRef.current);     retryTimerRef.current    = null; }
     if (stallIntervalRef.current) { clearInterval(stallIntervalRef.current); stallIntervalRef.current = null; }
+    if (startupTimerRef.current)  { clearTimeout(startupTimerRef.current);   startupTimerRef.current  = null; }
 
     hlsRef.current?.destroy();     hlsRef.current    = null;
     mpegtsRef.current?.destroy();  mpegtsRef.current = null;
@@ -50,9 +52,21 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
     const url = channel.url;
 
     const onWaiting = () => setBuffering(true);
-    const onPlaying = () => { setBuffering(false); setStatus('playing'); };
+    const onPlaying = () => {
+      setBuffering(false);
+      setStatus('playing');
+      // Cancel the startup watchdog once video is actually playing
+      if (startupTimerRef.current) { clearTimeout(startupTimerRef.current); startupTimerRef.current = null; }
+    };
     video.addEventListener('waiting', onWaiting);
     video.addEventListener('playing', onPlaying);
+
+    // Startup watchdog: if the video hasn't produced any frames within 10 s,
+    // the stream connected but sent no data (empty body, stalled CDN, etc.).
+    // The stall detector won't fire because readyState never reaches 2.
+    startupTimerRef.current = setTimeout(() => {
+      if (video.readyState < 2) scheduleAutoRetry();
+    }, 10_000);
 
     // Auto-retry with backoff before giving up and showing the error screen
     function scheduleAutoRetry() {
@@ -99,9 +113,24 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
         { type: 'mpegts', url: absoluteUrl, isLive: true },
         {
           enableWorker: true,
-          autoCleanupSourceBuffer: true,        // prevent buffer overflow → stalls
+          // Keep only a small back-buffer so GC stays fast
+          autoCleanupSourceBuffer: true,
           autoCleanupMinBackwardDuration: 10,
           autoCleanupMaxBackwardDuration: 20,
+          // Smaller stash = lower startup latency for live streams
+          enableStashBuffer: true,
+          stashInitialSize: 128 * 1024,
+          // Don't wait for the full stash before feeding the decoder
+          lazyLoad: false,
+          deferLoadAfterSourceOpen: false,
+          // Catch up to live edge faster when behind
+          liveBufferLatencyChasing: true,
+          liveBufferLatencyChasingOnPaused: false,
+          liveSync: true,
+          liveSyncTargetLatency: 8,       // target 8 s behind live edge
+          liveSyncPlaybackRate: 1.1,      // chase at 1.1× speed when behind
+          // Abort and retry a segment if it takes >15 s — avoids hanging on a bad segment
+          fetchBeforeUnlock: true,
         },
       );
       mpegtsRef.current = player;
@@ -114,7 +143,10 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
       video.play().catch(() => {});
     }
 
-    if (url.endsWith('.ts')) {
+    // DaddyLive channels ending in /ts are pre-transcoded MPEG-TS (HEVC→H.264)
+    const isDaddyliveTs = url.startsWith('/api/daddylive/') && url.endsWith('/ts');
+
+    if (url.endsWith('.ts') || isDaddyliveTs) {
       loadWithMpegts(proxyStreamUrl(url));
     } else if (Hls.isSupported()) {
       const hls = new Hls({
@@ -122,24 +154,34 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
         lowLatencyMode: false,
         startLevel: -1,
 
-        // Live TV: no back-buffer needed (can't rewind) → less memory pressure
+        // Buffer enough to absorb irregular segment delivery from free IPTV servers
         maxBufferLength: 20,
-        backBufferLength: 0,
+        maxMaxBufferLength: 40,
+        backBufferLength: 5,
 
-        // Stay close to live edge; jump forward if too far behind
-        liveSyncDurationCount: 3,
-        liveMaxLatencyDurationCount: 8,
+        // Stay ~4 segments behind live edge; chase at 1.1× speed when drifting behind
+        liveSyncDurationCount: 4,
+        liveMaxLatencyDurationCount: 10,
+        liveDurationInfinity: true,
+        liveBackBufferLength: 0,
 
-        // Faster retry on network blips
+        // Start prefetching first fragment before media is attached → faster startup
+        startFragPrefetch: true,
+
+        // Fast ABR convergence for live content
+        abrEwmaFastLive: 3.0,
+        abrEwmaSlowLive: 9.0,
+
+        // Generous timeouts — live IPTV CDNs are occasionally slow
         fragLoadingTimeOut: 15_000,
         manifestLoadingTimeOut: 10_000,
         levelLoadingTimeOut: 10_000,
-        fragLoadingMaxRetry: 6,
-        manifestLoadingMaxRetry: 4,
-        levelLoadingMaxRetry: 4,
-        fragLoadingRetryDelay: 500,
-        manifestLoadingRetryDelay: 500,
-        levelLoadingRetryDelay: 500,
+        fragLoadingMaxRetry: 4,
+        manifestLoadingMaxRetry: 3,
+        levelLoadingMaxRetry: 3,
+        fragLoadingRetryDelay: 1_000,
+        manifestLoadingRetryDelay: 1_000,
+        levelLoadingRetryDelay: 1_000,
       });
       hlsRef.current = hls;
       hls.loadSource(proxyStreamUrl(url));
@@ -166,6 +208,19 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
           return;
         }
 
+        // Codec not supported (e.g. HEVC on Chrome/Linux) → fall back to
+        // server-side ffmpeg transcoding endpoint which outputs H.264 MPEG-TS.
+        const isCodecError =
+          data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR ||
+          (data.details as string) === 'bufferIncompatibleCodecsError';
+        if (isCodecError && url.startsWith('/api/daddylive/') && !url.endsWith('/ts')) {
+          console.warn('[player] HEVC codec unsupported, switching to server-side transcode');
+          hls.destroy();
+          hlsRef.current = null;
+          loadWithMpegts(proxyStreamUrl(url + '/ts'));
+          return;
+        }
+
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR && r.network < 3) {
           r.network++;
           setTimeout(() => hls.startLoad(), 1_000 * r.network);
@@ -188,8 +243,9 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
     return () => {
       video.removeEventListener('waiting', onWaiting);
       video.removeEventListener('playing', onPlaying);
-      if (retryTimerRef.current)    clearTimeout(retryTimerRef.current);
+      if (retryTimerRef.current)   clearTimeout(retryTimerRef.current);
       if (stallIntervalRef.current) clearInterval(stallIntervalRef.current);
+      if (startupTimerRef.current) clearTimeout(startupTimerRef.current);
       hlsRef.current?.destroy();    hlsRef.current    = null;
       mpegtsRef.current?.destroy(); mpegtsRef.current = null;
     };
