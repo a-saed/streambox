@@ -4,7 +4,7 @@ import { Sidebar } from './components/Sidebar';
 import { EPGStrip } from './components/EPGStrip';
 import { OverlayControls } from './components/OverlayControls';
 import { useStore } from './store/useStore';
-import { fetchChannels, fetchEPG } from './lib/api';
+import { fetchChannels, fetchEPG, fetchHubLive } from './lib/api';
 import { Satellite, WifiOff, RefreshCw } from 'lucide-react';
 
 function AppLoader() {
@@ -78,6 +78,7 @@ export default function App() {
   const setChannels = useStore((s) => s.setChannels);
   const setEpg = useStore((s) => s.setEpg);
   const activeChannel = useStore((s) => s.activeChannel);
+  const setLiveHubChannelIds = useStore((s) => s.setLiveHubChannelIds);
 
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading]       = useState(true);
@@ -104,6 +105,15 @@ export default function App() {
     }
     load();
   }, [setChannels, setEpg, retryKey]);
+
+  useEffect(() => {
+    fetchHubLive().then(setLiveHubChannelIds);
+    const interval = setInterval(
+      () => fetchHubLive().then(setLiveHubChannelIds),
+      60_000
+    );
+    return () => clearInterval(interval);
+  }, [setLiveHubChannelIds]);
 
   if (loading) return <AppLoader />;
   if (error) return <AppError onRetry={() => setRetryKey(k => k + 1)} />;

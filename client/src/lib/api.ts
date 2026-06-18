@@ -51,6 +51,7 @@ export interface HubChannel {
 export interface HubStatus {
   portalCount: number;
   channelCount: number;
+  liveCount: number;
   portals: Array<{ id: string; name: string; streamCount: number }>;
 }
 
@@ -63,7 +64,20 @@ export async function fetchHubChannels(): Promise<HubChannel[]> {
 
 export async function fetchHubStatus(): Promise<HubStatus> {
   const res = await fetch(`${API_BASE}/api/hub/status`);
-  if (!res.ok) return { portalCount: 0, channelCount: 0, portals: [] };
+  if (!res.ok) return { portalCount: 0, channelCount: 0, liveCount: 0, portals: [] };
+  return res.json();
+}
+
+export async function fetchHubLive(): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/api/hub/live`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.liveChannelIds ?? [];
+}
+
+export async function fetchHubBest(channelId: string): Promise<{ url: string; source: string } | null> {
+  const res = await fetch(`${API_BASE}/api/hub/${channelId}/best`);
+  if (!res.ok) return null;
   return res.json();
 }
 

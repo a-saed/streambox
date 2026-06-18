@@ -10,15 +10,17 @@ interface AppState {
   sidebarWidth: number;
   category: string;
   searchQuery: string;
+  liveHubChannelIds: Set<string>;
 
   setChannels: (channels: Channel[]) => void;
   setEpg: (epg: EPGSchedule) => void;
-  setActiveChannel: (channel: Channel) => void;
+  setActiveChannel: (channel: Channel, sources?: string[]) => void;
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
   setSidebarWidth: (w: number) => void;
   setCategory: (category: string) => void;
   setSearchQuery: (query: string) => void;
+  setLiveHubChannelIds: (ids: string[]) => void;
 }
 
 const _storedWidth = () => {
@@ -35,11 +37,17 @@ export const useStore = create<AppState>((set, get) => ({
   sidebarWidth: _storedWidth(),
   category: 'All',
   searchQuery: '',
+  liveHubChannelIds: new Set<string>(),
 
   setChannels: (channels) => set({ channels, filtered: channels }),
   setEpg: (epg) => set({ epg }),
 
-  setActiveChannel: (channel) => set({ activeChannel: channel, sidebarOpen: false }),
+  setActiveChannel: (channel, sources) => {
+    const ch = sources?.length ? { ...channel, sources } : channel;
+    set({ activeChannel: ch, sidebarOpen: false });
+  },
+
+  setLiveHubChannelIds: (ids) => set({ liveHubChannelIds: new Set(ids) }),
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),

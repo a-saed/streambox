@@ -3,6 +3,7 @@ export interface Channel {
   name: string;
   logo: string;
   url: string;
+  sources?: string[];   // all known stream URLs ranked by reliability; sources[0] === url
   category: string;
   country: string;
   language: string;
