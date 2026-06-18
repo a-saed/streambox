@@ -1,14 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Input } from '@/components/ui/input';
+import { Search, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 
 export function SearchBar() {
   const searchQuery    = useStore((s) => s.searchQuery);
   const setSearchQuery = useStore((s) => s.setSearchQuery);
-
-  // Local state updates instantly so the input feels responsive.
-  // The expensive store filter only runs after 200ms of no typing,
-  // keeping the main thread free so video never stutters while typing.
   const [local, setLocal] = useState(searchQuery);
 
   useEffect(() => {
@@ -16,15 +12,28 @@ export function SearchBar() {
     return () => clearTimeout(t);
   }, [local, setSearchQuery]);
 
-  // Keep local in sync if store query is reset externally (e.g. category click)
   useEffect(() => { setLocal(searchQuery); }, [searchQuery]);
 
   return (
-    <Input
-      value={local}
-      placeholder="Search channels..."
-      onChange={(e) => setLocal(e.target.value)}
-      className="bg-zinc-800/50 border-zinc-700 text-zinc-100 placeholder:text-zinc-500"
-    />
+    <div className="relative">
+      <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600 pointer-events-none" />
+      <input
+        value={local}
+        placeholder="Search channels…"
+        onChange={(e) => setLocal(e.target.value)}
+        className="w-full bg-zinc-900/80 border border-white/[0.05] rounded-xl
+                  pl-9 pr-8 py-2.5 text-xs text-zinc-200 placeholder:text-zinc-600
+                  focus:outline-none focus:border-violet-500/40 focus:bg-zinc-900
+                  transition-all duration-150"
+      />
+      {local && (
+        <button
+          onClick={() => setLocal('')}
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 transition-colors"
+        >
+          <X size={12} />
+        </button>
+      )}
+    </div>
   );
 }

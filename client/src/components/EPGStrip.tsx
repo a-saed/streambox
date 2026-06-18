@@ -6,7 +6,6 @@ function getCurrentAndNext(entries: EPGEntry[]): { current: EPGEntry | null; nex
   const upcoming = entries
     .filter(e => new Date(e.end).getTime() > now)
     .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
-
   const current = upcoming.find(e => new Date(e.start).getTime() <= now) ?? null;
   const next    = upcoming.find(e => new Date(e.start).getTime() > now)  ?? null;
   return { current, next };
@@ -22,25 +21,25 @@ export function EPGStrip() {
   const { current, next } = getCurrentAndNext(entries);
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-10 flex items-center gap-3 px-4 py-3 bg-gradient-to-t from-black/80 to-transparent">
-      <span className="text-zinc-400 text-xs font-medium flex-shrink-0">
-        📺 {activeChannel.name}
-      </span>
-
+    <div className="absolute bottom-0 left-0 right-0 z-10 flex items-center gap-3 px-5 py-3
+                   bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none">
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+        <span className="text-zinc-300 text-[11px] font-medium">{activeChannel.name}</span>
+      </div>
       {current ? (
         <>
-          <span className="text-white text-xs">
-            Now: <span className="font-semibold">{current.title}</span>
+          <span className="text-zinc-600 text-[11px]">·</span>
+          <span className="text-zinc-400 text-[11px]">
+            Now: <span className="text-zinc-200 font-medium">{current.title}</span>
           </span>
           {next && (
-            <span className="text-zinc-500 text-xs hidden sm:inline">
-              │ Next: {next.title}
+            <span className="text-zinc-600 text-[11px] hidden sm:inline">
+              · Next: {next.title}
             </span>
           )}
         </>
-      ) : (
-        <span className="text-zinc-500 text-xs">● Live</span>
-      )}
+      ) : null}
     </div>
   );
 }

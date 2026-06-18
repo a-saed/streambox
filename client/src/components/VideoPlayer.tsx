@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import mpegts from 'mpegts.js';
+import { Play, WifiOff, RefreshCw } from 'lucide-react';
 import type { Channel } from '../types';
 import { proxyStreamUrl } from '../lib/api';
 
@@ -253,10 +254,24 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
 
   if (!channel) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-zinc-950">
-        <div className="text-center space-y-3">
-          <div className="text-6xl">📺</div>
-          <p className="text-zinc-500 text-lg">Open the sidebar and select a channel</p>
+      <div className="relative flex h-full w-full items-center justify-center bg-[#09090b] overflow-hidden">
+        {/* Dot grid */}
+        <div className="absolute inset-0"
+             style={{ backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px)', backgroundSize: '28px 28px' }} />
+        {/* Center glow */}
+        <div className="absolute inset-0"
+             style={{ background: 'radial-gradient(circle at 50% 50%, rgba(139,92,246,0.07) 0%, transparent 55%)' }} />
+        <div className="relative flex flex-col items-center gap-4"
+             style={{ animation: 'fade-up 0.6s ease-out' }}>
+          <div className="relative w-20 h-20 rounded-full border border-white/[0.08] flex items-center justify-center">
+            <div className="absolute inset-0 rounded-full"
+                 style={{ background: 'radial-gradient(circle, rgba(139,92,246,0.12) 0%, transparent 70%)' }} />
+            <Play size={30} className="text-white/50 ml-0.5" fill="currentColor" />
+          </div>
+          <div className="text-center space-y-1">
+            <p className="text-zinc-300 text-sm font-medium">Select a channel</p>
+            <p className="text-zinc-600 text-xs">Open the sidebar to start watching</p>
+          </div>
         </div>
       </div>
     );
@@ -272,32 +287,57 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
       />
 
       {status === 'loading' && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/70 z-10">
-          <div className="text-center space-y-3">
-            <div className="w-10 h-10 border-2 border-white/20 border-t-white rounded-full animate-spin mx-auto" />
-            <p className="text-zinc-400 text-sm">Loading stream…</p>
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/65 backdrop-blur-[2px] z-10">
+          <div className="relative w-12 h-12 mb-5">
+            <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-violet-500 border-r-violet-500/40"
+                 style={{ animation: 'orbit-cw 1.0s linear infinite' }} />
+            <div className="absolute inset-[5px] rounded-full border-2 border-transparent border-b-indigo-400 border-l-indigo-400/40"
+                 style={{ animation: 'orbit-ccw 0.75s linear infinite' }} />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-1.5 h-1.5 rounded-full bg-violet-400/50" />
+            </div>
           </div>
+          <p className="text-zinc-200 text-sm font-medium tracking-wide">{channel.name}</p>
+          <p className="text-zinc-500 text-xs mt-1.5">Connecting…</p>
         </div>
       )}
 
       {status === 'playing' && buffering && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-          <div className="w-8 h-8 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+        <div className="absolute top-4 right-4 pointer-events-none z-10"
+             style={{ animation: 'fade-up 0.2s ease-out' }}>
+          <div className="flex items-center gap-2 bg-black/70 backdrop-blur-md rounded-lg px-3 py-1.5 border border-white/[0.06]">
+            <div className="w-3 h-3 rounded-full border border-transparent border-t-violet-400"
+                 style={{ animation: 'orbit-cw 0.7s linear infinite' }} />
+            <span className="text-zinc-400 text-[11px] tracking-wide">Buffering</span>
+          </div>
         </div>
       )}
 
       {status === 'error' && (
-        <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/90 z-10">
-          <div className="text-center space-y-4">
-            <div className="text-3xl">⚠️</div>
-            <p className="text-zinc-400 text-sm">Stream unavailable</p>
+        <div className="absolute inset-0 flex items-center justify-center bg-[#09090b]/85 backdrop-blur-sm z-10">
+          <div className="flex flex-col items-center gap-5 max-w-[220px] text-center"
+               style={{ animation: 'fade-up 0.3s ease-out' }}>
+            <div className="w-14 h-14 rounded-2xl bg-zinc-900 border border-white/[0.06]
+                           flex items-center justify-center
+                           shadow-[0_0_30px_rgba(239,68,68,0.15)]">
+              <WifiOff size={22} className="text-red-400" strokeWidth={1.5} />
+            </div>
+            <div className="space-y-1">
+              <p className="text-white text-sm font-medium">Stream unavailable</p>
+              <p className="text-zinc-500 text-[11px] leading-relaxed">{channel.name}</p>
+            </div>
             <button
               onClick={handleManualRetry}
-              className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded transition-colors"
+              className="flex items-center gap-2 px-5 py-2 rounded-xl
+                         bg-gradient-to-r from-indigo-600 to-violet-600
+                         hover:from-indigo-500 hover:to-violet-500
+                         active:scale-[0.97] text-white text-xs font-medium
+                         transition-all duration-150 shadow-[0_0_20px_rgba(139,92,246,0.3)]"
             >
+              <RefreshCw size={12} />
               Retry
             </button>
-            <p className="text-zinc-600 text-xs">or try another channel</p>
+            <p className="text-zinc-700 text-[10px]">or select another channel</p>
           </div>
         </div>
       )}

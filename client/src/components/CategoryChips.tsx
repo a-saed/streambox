@@ -2,41 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 
-function getCategoryIcon(name: string): string {
-  const n = name.toLowerCase();
-  if (n === 'all')                                                        return '📺';
-  if (n.includes('sport'))                                                return '⚽';
-  if (n.includes('news'))                                                 return '📰';
-  if (n.includes('movie') || n.includes('film') || n.includes('cinema')) return '🎬';
-  if (n.includes('music'))                                                return '🎵';
-  if (n.includes('kid') || n.includes('child') || n.includes('cartoon')) return '🧸';
-  if (n.includes('docu'))                                                 return '🎥';
-  if (n.includes('comedy'))                                               return '😄';
-  if (n.includes('drama'))                                                return '🎭';
-  if (n.includes('entertain'))                                            return '🎉';
-  if (n.includes('science'))                                              return '🔬';
-  if (n.includes('nature'))                                               return '🌿';
-  if (n.includes('travel'))                                               return '✈️';
-  if (n.includes('cook') || n.includes('food') || n.includes('culinar')) return '🍳';
-  if (n.includes('lifestyle'))                                            return '✨';
-  if (n.includes('fitness') || n.includes('health'))                     return '💪';
-  if (n.includes('religio') || n.includes('faith') || n.includes('spirit')) return '🕌';
-  if (n.includes('business') || n.includes('financ'))                    return '💼';
-  if (n.includes('weather'))                                              return '⛅';
-  if (n.includes('educat') || n.includes('learn'))                       return '📚';
-  if (n.includes('auto') || n.includes('motor'))                         return '🚗';
-  if (n.includes('shop') || n.includes('retail'))                        return '🛍️';
-  if (n.includes('classic'))                                              return '📼';
-  if (n.includes('animat'))                                               return '🎨';
-  if (n.includes('legislat') || n.includes('polit'))                     return '🏛️';
-  if (n.includes('family'))                                               return '👨‍👩‍👧';
-  if (n.includes('relax') || n.includes('ambient'))                      return '🌊';
-  if (n.includes('tech') || n.includes('digital'))                       return '💻';
-  if (n.includes('fashion') || n.includes('style'))                      return '👗';
-  if (n.includes('outdoor') || n.includes('adventure'))                  return '🌲';
-  if (n.includes('game') || n.includes('gaming') || n.includes('esport')) return '🎮';
-  return '📡';
-}
 
 interface CategoryChipsProps {
   categories: string[];
@@ -68,9 +33,9 @@ export function CategoryChips({ categories }: CategoryChipsProps) {
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder="Filter categories…"
-          className="w-full bg-zinc-800/60 border border-zinc-700/50 rounded-lg
+          className="w-full bg-zinc-900/80 border border-white/[0.05] rounded-lg
             pl-7 pr-7 py-1.5 text-[11px] text-zinc-300 placeholder:text-zinc-600
-            focus:outline-none focus:border-indigo-500/60 focus:bg-zinc-800
+            focus:outline-none focus:border-violet-500/40
             transition-colors"
         />
         {query && (
@@ -106,16 +71,15 @@ export function CategoryChips({ categories }: CategoryChipsProps) {
                   key={cat}
                   ref={isActive ? activeRef : undefined}
                   onClick={() => { setCategory(cat); setQuery(''); }}
-                  className={`flex items-center gap-1.5 flex-shrink-0 px-2.5 py-1 rounded-full
+                  className={`flex-shrink-0 px-2.5 py-1 rounded-full
                     text-[11px] font-medium transition-all duration-150 outline-none
-                    focus-visible:ring-2 focus-visible:ring-indigo-500
+                    focus-visible:ring-2 focus-visible:ring-violet-500/50
                     ${isActive
-                      ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md shadow-indigo-500/30'
-                      : 'bg-zinc-800/80 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
+                      ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-[0_0_10px_rgba(139,92,246,0.25)]'
+                      : 'bg-zinc-900/80 text-zinc-500 border border-white/[0.05] hover:bg-zinc-800/80 hover:text-zinc-300'
                     }`}
                 >
-                  <span aria-hidden="true">{getCategoryIcon(cat)}</span>
-                  <span>{cat}</span>
+                  {cat}
                 </button>
               );
             })

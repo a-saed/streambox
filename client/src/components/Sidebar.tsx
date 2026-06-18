@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Tv2, Trophy, Satellite } from 'lucide-react';
+import { Tv2, Trophy, Satellite, X } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { SearchBar } from './SearchBar';
 import { CategoryChips } from './CategoryChips';
@@ -80,60 +80,68 @@ export function Sidebar({ categories }: SidebarProps) {
       <aside
         style={{ width: sidebarWidth }}
         className={`absolute left-0 top-0 h-full z-20 flex flex-col
-          backdrop-blur-md bg-zinc-900/85 border-r border-zinc-800/60
+          bg-zinc-950/90 backdrop-blur-xl border-r border-white/[0.05]
           transition-transform duration-300 ease-in-out
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800/60 flex-shrink-0">
-          <span className="text-white font-semibold tracking-wide text-sm uppercase truncate">
-            {tab === 'channels' ? 'Channels' : tab === 'hub' ? 'Channel Hub' : 'Matches'}
-          </span>
+        {/* Header: brand + close */}
+        <div className="flex items-center justify-between px-4 py-3.5 flex-shrink-0
+                       border-b border-white/[0.04]">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-600 to-violet-600
+                           flex items-center justify-center flex-shrink-0
+                           shadow-[0_0_12px_rgba(139,92,246,0.4)]">
+              <Satellite size={13} className="text-white" strokeWidth={1.5} />
+            </div>
+            <span className="text-white text-sm font-semibold tracking-[0.2em] uppercase select-none">
+              StreamBox
+            </span>
+          </div>
           <button
             onClick={() => setSidebarOpen(false)}
-            className="text-zinc-500 hover:text-zinc-300 transition-colors text-lg leading-none flex-shrink-0 ml-2"
+            className="w-6 h-6 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 transition-colors
+                      flex items-center justify-center text-zinc-500 hover:text-zinc-300"
             aria-label="Close sidebar"
           >
-            ✕
+            <X size={12} />
           </button>
         </div>
 
-        {/* Tab bar */}
-        <div className="flex border-b border-zinc-800/60 flex-shrink-0">
-          <button
-            onClick={() => setTab('channels')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors
-              ${tab === 'channels'
-                ? 'text-white border-b-2 border-indigo-500'
-                : 'text-zinc-500 hover:text-zinc-300 border-b-2 border-transparent'}`}
-          >
-            <Tv2 size={13} />
-            Channels
-          </button>
-          <button
-            onClick={() => setTab('hub')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors
-              ${tab === 'hub'
-                ? 'text-white border-b-2 border-indigo-500'
-                : 'text-zinc-500 hover:text-zinc-300 border-b-2 border-transparent'}`}
-          >
-            <Satellite size={13} />
-            Hub
-          </button>
-          <button
-            onClick={() => setTab('matches')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors
-              ${tab === 'matches'
-                ? 'text-white border-b-2 border-indigo-500'
-                : 'text-zinc-500 hover:text-zinc-300 border-b-2 border-transparent'}`}
-          >
-            <Trophy size={13} />
-            Matches
-          </button>
+        {/* Sliding pill tabs */}
+        <div className="px-3 pt-3 pb-2 flex-shrink-0">
+          <div className="relative flex bg-zinc-900/80 rounded-xl p-0.5 border border-white/[0.04]">
+            <div
+              className="absolute top-0.5 bottom-0.5 rounded-[10px]
+                         bg-gradient-to-r from-indigo-600 to-violet-600
+                         transition-all duration-250 ease-out"
+              style={{
+                width: 'calc(33.333% - 2px)',
+                left: tab === 'channels' ? '2px'
+                     : tab === 'hub'      ? 'calc(33.333% + 0px)'
+                     : 'calc(66.666% - 2px)',
+              }}
+            />
+            {([
+              { key: 'channels', label: 'Channels', Icon: Tv2 },
+              { key: 'hub',      label: 'Hub',      Icon: Satellite },
+              { key: 'matches',  label: 'Matches',  Icon: Trophy },
+            ] as const).map(({ key, label, Icon }) => (
+              <button
+                key={key}
+                onClick={() => setTab(key as Tab)}
+                className={`relative z-10 flex-1 flex items-center justify-center gap-1.5 py-2
+                           text-[11px] font-medium transition-colors duration-200
+                           ${tab === key ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+              >
+                <Icon size={11} />
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Content */}
-        <div className="flex flex-col gap-3 p-3 flex-1 min-h-0">
+        <div className="flex flex-col gap-3 p-3 pt-1 flex-1 min-h-0">
           {tab === 'channels' && (
             <>
               <SearchBar />
@@ -147,12 +155,11 @@ export function Sidebar({ categories }: SidebarProps) {
           )}
         </div>
 
-        {/* Drag-to-resize handle */}
+        {/* Resize handle */}
         <div
           onMouseDown={startResize}
-          className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize
-            hover:bg-indigo-500/50 active:bg-indigo-500/70 transition-colors z-30"
-          title="Drag to resize"
+          className="absolute right-0 top-0 h-full w-1 cursor-col-resize
+            hover:bg-violet-500/40 active:bg-violet-500/60 transition-colors z-30"
         />
       </aside>
     </>

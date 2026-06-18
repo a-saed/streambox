@@ -126,82 +126,91 @@ export function OverlayControls() {
       <div
         className="absolute top-0 right-0 pointer-events-auto
           flex items-center gap-3 px-5 py-4
-          bg-gradient-to-b from-black/80 to-transparent
+          bg-gradient-to-b from-black/75 to-transparent
           transition-[left] duration-300"
         style={{ left: offset }}
       >
         <button
           onClick={toggleSidebar}
-          className="text-white/80 hover:text-white transition-colors"
+          className="w-8 h-8 rounded-xl bg-black/40 hover:bg-black/60 backdrop-blur-sm
+                    border border-white/[0.08] flex items-center justify-center
+                    text-white/70 hover:text-white transition-all duration-150"
           aria-label="Toggle sidebar"
         >
-          <Menu size={20} />
+          <Menu size={16} />
         </button>
-        <span className="text-white/90 font-medium text-sm tracking-wide truncate">
-          {activeChannel?.name ?? 'IPTV Player'}
-        </span>
+
+        {activeChannel && (
+          <div className="flex items-center gap-2.5">
+            <span className="flex items-center gap-1.5 bg-red-500/20 border border-red-500/30
+                            px-2 py-0.5 rounded-md">
+              <span className="w-1 h-1 rounded-full bg-red-500 animate-pulse" />
+              <span className="text-red-400 text-[10px] font-bold tracking-widest">LIVE</span>
+            </span>
+            <span className="text-white/90 font-medium text-sm tracking-wide truncate max-w-[300px]">
+              {activeChannel.name}
+            </span>
+          </div>
+        )}
+
+        {!activeChannel && (
+          <span className="text-white/40 text-sm">IPTV Player</span>
+        )}
       </div>
 
-      {/* Bottom bar — only when a channel is active */}
-      {activeChannel && <div
-        className="absolute bottom-14 right-0 pointer-events-auto
-          flex items-center gap-2 px-5 py-3
-          transition-[left] duration-300"
-        style={{ left: offset }}
-      >
-        {/* Left cluster: play + volume */}
-        <div className="flex items-center gap-3 bg-black/50 backdrop-blur-md rounded-xl px-4 py-2.5">
-          <button
-            onClick={togglePlay}
-            className="text-white hover:text-white/70 transition-colors"
-            aria-label={playing ? 'Pause' : 'Play'}
-          >
-            {playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}
-          </button>
+      {/* Bottom bar */}
+      {activeChannel && (
+        <div
+          className="absolute bottom-14 right-0 pointer-events-auto
+            flex items-center gap-2 px-5 py-3
+            transition-[left] duration-300"
+          style={{ left: offset }}
+        >
+          <div className="flex items-center gap-3 bg-black/60 backdrop-blur-xl rounded-2xl px-4 py-2.5
+                         border border-white/[0.06] shadow-[0_4px_20px_rgba(0,0,0,0.4)]">
+            <button
+              onClick={togglePlay}
+              className="text-white hover:text-white/70 transition-colors"
+              aria-label={playing ? 'Pause' : 'Play'}
+            >
+              {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
+            </button>
+            <div className="w-px h-3.5 bg-white/10" />
+            <button
+              onClick={toggleMute}
+              className="text-white/70 hover:text-white transition-colors"
+              aria-label={muted ? 'Unmute' : 'Mute'}
+            >
+              <VolumeIcon size={16} />
+            </button>
+            <Slider
+              value={[muted ? 0 : volume]}
+              onValueChange={(val: number | readonly number[]) => {
+                const v = Array.isArray(val) ? (val as readonly number[])[0] : (val as number);
+                setVolume(v);
+                if (v > 0) setMuted(false);
+              }}
+              min={0}
+              max={100}
+              step={1}
+              className="w-20 flex-shrink-0"
+            />
+          </div>
 
-          <div className="w-px h-4 bg-white/20" />
+          <div className="flex-1" />
 
-          <button
-            onClick={toggleMute}
-            className="text-white/80 hover:text-white transition-colors"
-            aria-label={muted ? 'Unmute' : 'Mute'}
-          >
-            <VolumeIcon size={18} />
-          </button>
-
-          <Slider
-            value={[muted ? 0 : volume]}
-            onValueChange={(val: number | readonly number[]) => {
-              const v = Array.isArray(val) ? (val as readonly number[])[0] : (val as number);
-              setVolume(v);
-              if (v > 0) setMuted(false);
-            }}
-            min={0}
-            max={100}
-            step={1}
-            className="w-24 flex-shrink-0"
-          />
+          <div className="flex items-center bg-black/60 backdrop-blur-xl rounded-2xl px-4 py-2.5
+                         border border-white/[0.06] shadow-[0_4px_20px_rgba(0,0,0,0.4)]">
+            <button
+              onClick={toggleFullscreen}
+              className="text-white/70 hover:text-white transition-colors"
+              aria-label="Toggle fullscreen"
+            >
+              {fullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+            </button>
+          </div>
         </div>
-
-        <div className="flex-1" />
-
-        {/* Right cluster: live badge + fullscreen */}
-        <div className="flex items-center gap-3 bg-black/50 backdrop-blur-md rounded-xl px-4 py-2.5">
-          {activeChannel && (
-            <span className="flex items-center gap-1.5 text-xs font-semibold text-red-400 select-none">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-              LIVE
-            </span>
-          )}
-          <button
-            onClick={toggleFullscreen}
-            className="text-white/80 hover:text-white transition-colors"
-            aria-label="Toggle fullscreen"
-          >
-            {fullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
-          </button>
-        </div>
-      </div>}
+      )}
     </div>
   );
 }
