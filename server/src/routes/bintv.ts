@@ -4,137 +4,167 @@ import { getSharedBrowser, makeProxyContextOptions } from '../services/browser';
 const router = Router();
 
 const SPORTTSONLINE_BASE = 'https://ww2.sporttsonline.click/channels/hd';
-// Windows UA — Linux + headless Chromium is a strong automation signal
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-// Signed m3u8 URLs from 15072669.net expire in ~5-6h; cache for 4h
+// Signed URLs from 15072669.net expire in ~5-6h; cache for 4h
 const CACHE_TTL_MS = 4 * 60 * 60 * 1000;
 
 interface StreamEntry { m3u8Url: string; referer: string; fetchedAt: number; }
 const _cache = new Map<string, StreamEntry>();
 
-// Navigate sporttsonline via Playwright and intercept:
-//   1. The first request to *.dyngutter.net → dyngutter Referer header
-//   2. The HLS m3u8 URL from 15072669.net
-// Context-level interception catches cross-origin iframe requests.
-// We no longer gate on a plain-fetch pre-check because fly.io IPs may be
-// blocked by sporttsonline, causing an immediate null return before Playwright
-// even gets a chance.
+// ── Stage 1: Pure HTTP parse ──────────────────────────────────────────────────
+// Fetch the page without a browser.  If the site serves the player config in
+// static HTML (common on simple PHP pages), we get the URL without executing
+// any JavaScript and without touching any bot detection.
+// ─────────────────────────────────────────────────────────────────────────────
+const _NAV_HEADERS = {
+  'User-Agent': UA,
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.5',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'cross-site',
+  'Cache-Control': 'no-cache',
+};
+
+function _extractM3u8(html: string, baseReferer: string): { m3u8Url: string; referer: string } | null {
+  const patterns: RegExp[] = [
+    // bare .m3u8 URL in quotes
+    /["'`](https?:\/\/[^"'`\s]+\.m3u8(?:\?[^"'`\s]*)?)["'`]/,
+    // player config: file/source/src/url/stream/hls = "..."
+    /(?:file|source|src|url|stream|hls)\s*[:=]\s*["'`](https?:\/\/[^"'`\s]+\.m3u8(?:\?[^"'`\s]*)?)["'`]/i,
+  ];
+  for (const p of patterns) {
+    const m = html.match(p);
+    if (m && !m[1].includes('sporttsonline')) return { m3u8Url: m[1], referer: baseReferer };
+  }
+  return null;
+}
+
+async function _staticParse(channelId: string): Promise<{ m3u8Url: string; referer: string } | null> {
+  const pageUrl = `${SPORTTSONLINE_BASE}/${channelId}.php`;
+  try {
+    const r = await fetch(pageUrl, {
+      headers: { ..._NAV_HEADERS, 'Referer': 'https://prabashsapkota.github.io/' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!r.ok) return null;
+    const html = await r.text();
+
+    // Direct hit in the main page HTML
+    const direct = _extractM3u8(html, pageUrl);
+    if (direct) return direct;
+
+    // Follow iframe / embed src
+    const iframeM = html.match(/<(?:iframe|embed)[^>]+(?:src|data-src)=["']([^'"]+)["']/i);
+    if (!iframeM) return null;
+
+    let iframeUrl = iframeM[1];
+    if (iframeUrl.startsWith('//')) iframeUrl = 'https:' + iframeUrl;
+    else if (iframeUrl.startsWith('/')) iframeUrl = new URL(iframeUrl, pageUrl).href;
+    if (!iframeUrl.startsWith('http')) return null;
+
+    const ir = await fetch(iframeUrl, {
+      headers: { ..._NAV_HEADERS, 'Referer': pageUrl },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!ir.ok) return null;
+    return _extractM3u8(await ir.text(), iframeUrl);
+  } catch {
+    return null;
+  }
+}
+
+// ── Stage 2: Playwright HLS interception ──────────────────────────────────────
+// Navigate the page inside a stealth-patched headless Chromium and intercept
+// the first m3u8 request.  We do NOT block lolo.js — with
+// --disable-blink-features=AutomationControlled in the browser launch args,
+// navigator.webdriver is false at the C++ level and lolo.js sees a real browser,
+// passes its check, and triggers the player normally.
+// ─────────────────────────────────────────────────────────────────────────────
 async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; referer: string } | null> {
   let ctx;
+  const pageUrl = `${SPORTTSONLINE_BASE}/${channelId}.php`;
   try {
     const browser = await getSharedBrowser();
     ctx = await browser.newContext({
       userAgent: UA,
+      viewport: { width: 1280, height: 720 },
       ignoreHTTPSErrors: true,
-      extraHTTPHeaders: {
-        // sporttsonline expects to be embedded from prabashsapkota.github.io
-        'Referer': 'https://prabashsapkota.github.io/',
-      },
+      extraHTTPHeaders: { 'Referer': 'https://prabashsapkota.github.io/' },
       ...makeProxyContextOptions(),
     });
 
-    // Block the rotating daily anti-bot JS (lolo_YYYYMMDD_NN.js) before it runs.
-    // The script detects Playwright via webdriver, chrome object, and timing heuristics.
-    // Intercepting it at context level catches it even when loaded from iframes.
-    await ctx.route('**/lolo_*.js', route => route.fulfill({
-      status: 200,
-      contentType: 'application/javascript; charset=utf-8',
-      body: '',
-    }));
-
-    // Also block common ad/fingerprinting networks that phone home with bot scores.
+    // Block ad / fingerprinting endpoints that could phone home with bot scores
     await ctx.route(/\/(ads?|analytics|fingerprint|captcha|challenge|turnstile)\b/i,
       route => route.abort());
 
     const page = await ctx.newPage();
 
-    // Stealth patches — run before any page script so the environment looks like
-    // a real Windows Chrome browser.
+    // Stealth patches — browser.ts already adds --disable-blink-features=AutomationControlled
+    // which handles navigator.webdriver at the C++ level.  These patches cover the
+    // remaining JS-accessible properties that headless Chrome exposes differently.
     await page.addInitScript(`
-      // 1. Remove webdriver flag
-      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-      // 2. chrome runtime (absent in headless)
+      // chrome runtime (absent in headless)
       window.chrome = {
         runtime: { id: undefined, connect: () => {}, sendMessage: () => {} },
-        loadTimes: () => ({}),
-        csi: () => ({}),
-        app: { isInstalled: false },
+        loadTimes: () => ({}), csi: () => ({}), app: { isInstalled: false },
       };
 
-      // 3. Plugins — empty length is a headless giveaway
-      const _plugins = [
-        { name: 'Chrome PDF Plugin',         filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-        { name: 'Chrome PDF Viewer',          filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-        { name: 'Native Client',             filename: 'internal-nacl-plugin', description: '' },
+      // Plugins — empty length is a headless giveaway
+      const _pl = [
+        { name: 'Chrome PDF Plugin',  filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+        { name: 'Chrome PDF Viewer',  filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+        { name: 'Native Client',      filename: 'internal-nacl-plugin', description: '' },
       ];
       Object.defineProperty(navigator, 'plugins', {
-        get: () => Object.assign(_plugins, { item: (i) => _plugins[i] ?? null, namedItem: (n) => _plugins.find(p => p.name === n) ?? null, refresh: () => {} }),
-      });
-      Object.defineProperty(navigator, 'mimeTypes', {
-        get: () => Object.assign([], { item: () => null, namedItem: () => null }),
+        get: () => Object.assign(_pl, { item: (i) => _pl[i] ?? null, namedItem: (n) => _pl.find(p => p.name === n) ?? null, refresh: () => {} }),
       });
 
-      // 4. Language / platform
-      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-      Object.defineProperty(navigator, 'platform',  { get: () => 'Win32' });
+      Object.defineProperty(navigator, 'languages',          { get: () => ['en-US', 'en'] });
+      Object.defineProperty(navigator, 'platform',           { get: () => 'Win32' });
+      Object.defineProperty(navigator, 'hardwareConcurrency',{ get: () => 8 });
 
-      // 5. Hardware concurrency (headless often reports 2)
-      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-
-      // 6. Permissions — headless lacks notification permission context
-      const _origPermQuery = navigator.permissions?.query?.bind(navigator.permissions);
-      if (_origPermQuery) {
-        navigator.permissions.query = (params) =>
-          params.name === 'notifications'
+      // Permissions — headless lacks notification context
+      const _oq = navigator.permissions?.query?.bind(navigator.permissions);
+      if (_oq) {
+        navigator.permissions.query = (p) =>
+          p.name === 'notifications'
             ? Promise.resolve(Object.assign(Object.create(PermissionStatus.prototype), { state: 'default', onchange: null }))
-            : _origPermQuery(params);
+            : _oq(p);
       }
 
-      // 7. Visibility — streams may not start in a 'hidden' tab
+      // Tab visibility — player may refuse to start in a hidden tab
       Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
       Object.defineProperty(document, 'hidden',          { get: () => false });
 
-      // 8. Window size — headless defaults to 800×600
       Object.defineProperty(window, 'outerWidth',  { get: () => 1280 });
       Object.defineProperty(window, 'outerHeight', { get: () => 720 });
 
-      // 9. Battery — absence triggers detection in some scripts
       navigator.getBattery = () => Promise.resolve({ charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1, addEventListener: () => {}, removeEventListener: () => {} });
 
-      // 10. Devtools detector suppression
       Object.defineProperty(window, 'devtoolsDetector', { get: () => undefined, set: () => {} });
     `);
 
-    const pageUrl = `${SPORTTSONLINE_BASE}/${channelId}.php`;
     const result = await new Promise<{ m3u8Url: string; referer: string } | null>((resolve) => {
       const timer = setTimeout(() => resolve(null), 35_000);
       let dyngutterReferer = '';
 
       ctx!.on('request', (req: import('playwright').Request) => {
         const url = req.url();
-
-        // Capture dyngutter subdomain for Referer header on manifest/segment requests
         if (!dyngutterReferer && url.includes('.dyngutter.net')) {
           try { dyngutterReferer = new URL(url).origin + '/'; } catch { /* ignore */ }
         }
-
-        // Match any m3u8 from 15072669.net or other streaming CDNs that aren't the site itself
+        // Match any m3u8 that isn't from sporttsonline itself
         if (url.includes('.m3u8') && !url.includes('sporttsonline')) {
           clearTimeout(timer);
-          // Fall back to the page URL as referer if dyngutter subdomain wasn't seen yet
           resolve({ m3u8Url: url, referer: dyngutterReferer || pageUrl });
         }
       });
 
-      page.goto(pageUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 25_000,
-      }).then(async () => {
-        // Simulate user click to unblock autoplay-gated stream players
-        await page.mouse.click(300, 300).catch(() => {});
-      }).catch(() => {});
+      page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 25_000 })
+        .then(async () => { await page.mouse.click(300, 300).catch(() => {}); })
+        .catch(() => {});
     });
 
     return result;
@@ -146,28 +176,35 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
   }
 }
 
+// ── Stream resolver (static → Playwright) ────────────────────────────────────
 async function _getStream(channelId: string): Promise<StreamEntry | null> {
   const cached = _cache.get(channelId);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached;
 
-  console.log(`[bintv] ${channelId}: intercepting HLS via Playwright…`);
-  const hit = await _interceptHLS(channelId);
+  // Fast path: try without a browser first
+  const staticHit = await _staticParse(channelId);
+  if (staticHit) {
+    const entry: StreamEntry = { ...staticHit, fetchedAt: Date.now() };
+    _cache.set(channelId, entry);
+    console.log(`[bintv] ${channelId}: static parse → ${staticHit.m3u8Url.slice(0, 80)}`);
+    return entry;
+  }
 
+  // Fallback: Playwright interception
+  console.log(`[bintv] ${channelId}: Playwright interception…`);
+  const hit = await _interceptHLS(channelId);
   if (!hit?.m3u8Url) {
     console.warn(`[bintv] ${channelId}: HLS intercept failed`);
     return null;
   }
-  if (!hit.referer) {
-    console.warn(`[bintv] ${channelId}: no referer captured, proceeding without`);
-  }
 
   const entry: StreamEntry = { m3u8Url: hit.m3u8Url, referer: hit.referer, fetchedAt: Date.now() };
   _cache.set(channelId, entry);
-  console.log(`[bintv] ${channelId}: cached ${hit.m3u8Url.slice(0, 80)}`);
+  console.log(`[bintv] ${channelId}: Playwright → ${hit.m3u8Url.slice(0, 80)}`);
   return entry;
 }
 
-// ── Proxy: fetch a segment/manifest with the dyngutter Referer ────────────────
+// ── Proxy: forward manifest/segment with correct Referer ──────────────────────
 router.get('/proxy', async (req: Request, res: Response) => {
   const rawUrl = req.query.url as string;
   const rawRef = req.query.ref as string;
@@ -190,16 +227,14 @@ router.get('/proxy', async (req: Request, res: Response) => {
     res.set('Content-Type', isTs ? 'video/mp2t' : (ct || 'application/octet-stream'));
     res.set('Cache-Control', 'no-store');
     res.set('Access-Control-Allow-Origin', '*');
-
-    const buf = Buffer.from(await r.arrayBuffer());
-    return res.send(buf);
+    return res.send(Buffer.from(await r.arrayBuffer()));
   } catch {
     return res.status(503).end();
   }
 });
 
-// ── Main HLS manifest endpoint ────────────────────────────────────────────────
-// GET /api/bintv/:channelId  (e.g. /api/bintv/hd11 for Arabic beIN World Cup)
+// ── Main manifest endpoint ────────────────────────────────────────────────────
+// GET /api/bintv/:channelId  e.g. /api/bintv/hd11
 router.get('/:channelId', async (req: Request, res: Response) => {
   const { channelId } = req.params;
   if (!/^hd\d+$/.test(channelId)) return res.status(400).json({ error: 'invalid id' });
@@ -207,7 +242,7 @@ router.get('/:channelId', async (req: Request, res: Response) => {
   let entry = await _getStream(channelId);
   if (!entry) return res.status(503).json({ error: 'stream unavailable' });
 
-  // Fetch the manifest (retry once on 403 — signed URL may have expired)
+  // Fetch manifest; retry once if signed URL has expired (403/401)
   let text: string | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -215,7 +250,7 @@ router.get('/:channelId', async (req: Request, res: Response) => {
         headers: {
           'User-Agent': UA,
           'Referer': entry.referer,
-          'Origin': new URL(entry.referer).origin,
+          ...(entry.referer.startsWith('http') ? { 'Origin': new URL(entry.referer).origin } : {}),
         },
         signal: AbortSignal.timeout(10_000),
       });
@@ -231,9 +266,9 @@ router.get('/:channelId', async (req: Request, res: Response) => {
   if (!text || !entry) return res.status(503).json({ error: 'manifest unavailable' });
 
   const liveEntry = entry;
-  const baseUrl = new URL(liveEntry.m3u8Url);
-  const baseDir = baseUrl.origin + baseUrl.pathname.replace(/\/[^/]*$/, '/');
-  const ref = encodeURIComponent(liveEntry.referer);
+  const baseUrl   = new URL(liveEntry.m3u8Url);
+  const baseDir   = baseUrl.origin + baseUrl.pathname.replace(/\/[^/]*$/, '/');
+  const ref       = encodeURIComponent(liveEntry.referer);
 
   const rewritten = text.replace(/^(?!#)(\S+)$/gm, (line) => {
     if (!line.trim()) return line;

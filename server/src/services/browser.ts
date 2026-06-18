@@ -25,8 +25,12 @@ export async function getSharedBrowser(): Promise<Browser> {
         '--disable-dev-shm-usage',
         '--disable-gpu',
         '--mute-audio',
-        '--single-process',          // lower memory in constrained envs
         '--disable-extensions',
+        // Critical for bypassing bot detection — removes navigator.webdriver at the
+        // C++ level before any JS runs.  Without this, addInitScript patches are a
+        // race against inline scripts that read the real value first.
+        '--disable-blink-features=AutomationControlled',
+        '--exclude-switches=enable-automation',
       ],
     });
     _browser.on('disconnected', () => { _browser = null; _launching = false; });
