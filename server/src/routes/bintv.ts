@@ -75,53 +75,106 @@ async function _staticParse(channelId: string): Promise<{ m3u8Url: string; refer
   }
 }
 
-// ── Stage 2: Playwright — JS context extraction ───────────────────────────────
-// The dyngutter player uses SwarmCloud P2P HLS which routes segment/manifest
-// fetches through a web worker — those requests are invisible to Playwright's
-// ctx.on('request').  Instead we:
-//  1. Let the page load and trigger the player (click gate)
-//  2. Wait for stream.js to decode _econfig and configure Clappr
-//  3. Read the m3u8 URL directly from the Clappr player object in the iframe's
-//     JS context — it must be in memory since the player is initialised with it
-//  4. Also sniff any m3u8 that appears via HTTP (rare but covers edge cases)
+// ── Stage 2: Playwright ───────────────────────────────────────────────────────
+// dyngutter embeds a Clappr + SwarmCloud P2P player.  SwarmCloud uses blob: web
+// workers for TS segment fetching, but the initial m3u8 manifest fetch IS a
+// regular XHR/fetch visible to Playwright's ctx.on('request').
+// Strategy:
+//  1. Block main-frame ad navigations so stray clicks can't hijack the page
+//  2. Patch fetch/XHR/Worker.postMessage in the init script as a secondary net
+//  3. Click the player gate then wait up to 25s for the manifest to appear
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _STEALTH_SCRIPT = `
-  window.chrome = {
-    runtime: { id: undefined, connect: () => {}, sendMessage: () => {} },
-    loadTimes: () => ({}), csi: () => ({}), app: { isInstalled: false },
+const _INIT_SCRIPT = `
+(function(){
+  // ── Stealth ─────────────────────────────────────────────────────────────────
+  window.chrome = { runtime:{id:undefined,connect:()=>{},sendMessage:()=>{}}, loadTimes:()=>({}), csi:()=>({}), app:{isInstalled:false} };
+  var _pl=[{name:'Chrome PDF Plugin',filename:'internal-pdf-viewer',description:'Portable Document Format'},{name:'Chrome PDF Viewer',filename:'mhjfbmdgcfjbbpaeojofohoefgiehjai',description:''},{name:'Native Client',filename:'internal-nacl-plugin',description:''}];
+  Object.defineProperty(navigator,'plugins',{get:function(){return Object.assign(_pl,{item:function(i){return _pl[i]||null},namedItem:function(n){return _pl.find(function(p){return p.name===n})||null},refresh:function(){}});}});
+  Object.defineProperty(navigator,'languages',{get:function(){return['en-US','en']}});
+  Object.defineProperty(navigator,'platform',{get:function(){return'Win32'}});
+  Object.defineProperty(navigator,'hardwareConcurrency',{get:function(){return 8}});
+  try{var _b=[{brand:'Google Chrome',version:'124'},{brand:'Chromium',version:'124'},{brand:'Not-A.Brand',version:'99'}];Object.defineProperty(navigator,'userAgentData',{get:function(){return{brands:_b,mobile:false,platform:'Windows',getHighEntropyValues:function(){return Promise.resolve({brands:_b,mobile:false,platform:'Windows',platformVersion:'10.0.0',architecture:'x86',bitness:'64',model:'',uaFullVersion:'124.0.0.0'})},toJSON:function(){return{brands:_b,mobile:false,platform:'Windows'}}}},configurable:true});}catch(_){}
+  var _oq=navigator.permissions&&navigator.permissions.query&&navigator.permissions.query.bind(navigator.permissions);
+  if(_oq)navigator.permissions.query=function(p){return p.name==='notifications'?Promise.resolve(Object.assign(Object.create(PermissionStatus.prototype),{state:'default',onchange:null})):_oq(p);};
+  Object.defineProperty(document,'visibilityState',{get:function(){return'visible'}});
+  Object.defineProperty(document,'hidden',{get:function(){return false}});
+  Object.defineProperty(window,'outerWidth',{get:function(){return 1280}});
+  Object.defineProperty(window,'outerHeight',{get:function(){return 720}});
+  navigator.getBattery=function(){return Promise.resolve({charging:true,chargingTime:0,dischargingTime:Infinity,level:1,addEventListener:function(){},removeEventListener:function(){}})};
+  Object.defineProperty(window,'devtoolsDetector',{get:function(){return undefined},set:function(){}});
+
+  // ── m3u8 interception ───────────────────────────────────────────────────────
+  // SwarmCloud P2P routes HLS fetches through blob: web workers.
+  // We intercept at three levels: Worker.postMessage (primary, catches the URL
+  // as it's handed to the worker), fetch/XHR (fallback if player uses direct
+  // HTTP instead of P2P), and URL.createObjectURL (reads blob worker source).
+  function _report(url) {
+    if (!url || typeof url !== 'string' || url.indexOf('.m3u8') === -1) return;
+    try { if (typeof window.__reportM3u8 === 'function') window.__reportM3u8(url); } catch(_) {}
+  }
+  // Extract the first http(s)://...m3u8 URL from an arbitrary string without regex
+  // (avoids backslash escaping headaches inside a template-literal JS string).
+  function _findM3u8(str) {
+    if (!str) return null;
+    var idx = str.indexOf('.m3u8');
+    if (idx < 0) return null;
+    var start = str.lastIndexOf('http', idx);
+    if (start < 0 || idx - start > 400) return null;
+    var end = idx + 5; // step past '.m3u8'
+    while (end < str.length) {
+      var c = str[end];
+      if (c === '"' || c === "'" || c === ' ' || c === ',' || c === '\t' || c === '\n' || c === '\r' || c === '{' || c === '}' || c === '[' || c === ']') break;
+      end++;
+    }
+    return str.slice(start, end);
+  }
+
+  // fetch
+  var _oFetch = window.fetch;
+  window.fetch = function(input, init) {
+    try { _report(typeof input==='string'?input:(input&&input.url)); } catch(_) {}
+    return _oFetch.call(this, input, init);
   };
-  const _pl = [
-    { name: 'Chrome PDF Plugin',  filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-    { name: 'Chrome PDF Viewer',  filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-    { name: 'Native Client',      filename: 'internal-nacl-plugin', description: '' },
-  ];
-  Object.defineProperty(navigator, 'plugins', {
-    get: () => Object.assign(_pl, { item: (i) => _pl[i] ?? null, namedItem: (n) => _pl.find(p => p.name === n) ?? null, refresh: () => {} }),
-  });
-  Object.defineProperty(navigator, 'languages',           { get: () => ['en-US', 'en'] });
-  Object.defineProperty(navigator, 'platform',            { get: () => 'Win32' });
-  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-  try {
-    const _b = [{ brand:'Google Chrome',version:'124'},{ brand:'Chromium',version:'124'},{ brand:'Not-A.Brand',version:'99'}];
-    Object.defineProperty(navigator, 'userAgentData', {
-      get: () => ({ brands:_b, mobile:false, platform:'Windows',
-        getHighEntropyValues: () => Promise.resolve({ brands:_b, mobile:false, platform:'Windows', platformVersion:'10.0.0', architecture:'x86', bitness:'64', model:'', uaFullVersion:'124.0.0.0' }),
-        toJSON: () => ({ brands:_b, mobile:false, platform:'Windows' }) }),
-      configurable: true,
-    });
-  } catch(_) {}
-  const _oq = navigator.permissions?.query?.bind(navigator.permissions);
-  if (_oq) navigator.permissions.query = (p) =>
-    p.name==='notifications'
-      ? Promise.resolve(Object.assign(Object.create(PermissionStatus.prototype),{state:'default',onchange:null}))
-      : _oq(p);
-  Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
-  Object.defineProperty(document, 'hidden',          { get: () => false });
-  Object.defineProperty(window,   'outerWidth',      { get: () => 1280 });
-  Object.defineProperty(window,   'outerHeight',     { get: () => 720 });
-  navigator.getBattery = () => Promise.resolve({ charging:true, chargingTime:0, dischargingTime:Infinity, level:1, addEventListener:()=>{}, removeEventListener:()=>{} });
-  Object.defineProperty(window, 'devtoolsDetector', { get:()=>undefined, set:()=>{} });
+
+  // XMLHttpRequest
+  var _oXHROpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function() {
+    try { _report(arguments[1]); } catch(_) {}
+    return _oXHROpen.apply(this, arguments);
+  };
+
+  // Worker — intercepts postMessage so we catch m3u8 URLs sent to blob workers
+  var _OWorker = window.Worker;
+  if (_OWorker) {
+    window.Worker = function(url, opts) {
+      var w = new _OWorker(url, opts);
+      var _oPM = w.postMessage.bind(w);
+      w.postMessage = function(data, transfer) {
+        try {
+          var str = typeof data === 'string' ? data : JSON.stringify(data);
+          var found = _findM3u8(str);
+          if (found) _report(found);
+        } catch(_) {}
+        return _oPM(data, transfer);
+      };
+      return w;
+    };
+    try { Object.setPrototypeOf(window.Worker, _OWorker); window.Worker.prototype = _OWorker.prototype; } catch(_) {}
+  }
+
+  // URL.createObjectURL — read blob worker script content for embedded m3u8 strings
+  var _oCOBU = URL.createObjectURL.bind(URL);
+  URL.createObjectURL = function(obj) {
+    var result = _oCOBU(obj);
+    try {
+      if (obj && typeof obj.text === 'function') {
+        obj.text().then(function(txt) { var u = _findM3u8(txt); if (u) _report(u); }).catch(function(){});
+      }
+    } catch(_) {}
+    return result;
+  };
+})();
 `;
 
 // Read m3u8 from the Clappr player object or <video> element inside the dyngutter iframe.
@@ -154,10 +207,9 @@ async function _extractFromPlayerContext(page: import('playwright').Page): Promi
 }
 
 async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; referer: string } | null> {
-  let ctx;
+  let ctx: import('playwright').BrowserContext | undefined;
   const pageUrl = `${SPORTTSONLINE_BASE}/${channelId}.php`;
   let dyngutterReferer = '';
-  let networkM3u8 = '';
 
   try {
     const browser = await getSharedBrowser();
@@ -165,71 +217,104 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
       userAgent: UA,
       viewport: { width: 1280, height: 720 },
       ignoreHTTPSErrors: true,
-      // ⚠️ NO extraHTTPHeaders — Playwright applies them to ALL requests including
-      // iframe navigations.  dyngutter.net domain-checks Referer and requires it
-      // to be *.sporttsonline.click.  Without this override the browser sets it
-      // correctly from the parent page navigation.
+      // ⚠️ NO extraHTTPHeaders — dyngutter.net checks Referer == *.sporttsonline.click
       ...makeProxyContextOptions(),
     });
 
-    await ctx.addInitScript(_STEALTH_SCRIPT);
+    // ── m3u8 promise resolved by either the JS intercept callback or network ──
+    let _resolveM3u8!: (url: string) => void;
+    const m3u8Promise = new Promise<string>(resolve => { _resolveM3u8 = resolve; });
 
-    // Sniff any m3u8 that appears via HTTP (covers cases where P2P is disabled/slow)
+    // exposeFunction registers __reportM3u8 on window in every frame of this context.
+    // Our _INIT_SCRIPT calls it whenever fetch/XHR/Worker.postMessage/createObjectURL
+    // detects a URL ending in .m3u8.
+    await ctx.exposeFunction('__reportM3u8', (url: string) => {
+      if (url?.includes('.m3u8')) {
+        console.log(`[bintv] ${channelId}: m3u8 via JS intercept → ${url.slice(0, 100)}`);
+        _resolveM3u8(url);
+      }
+    });
+
+    await ctx.addInitScript(_INIT_SCRIPT);
+
     ctx.on('request', (req: import('playwright').Request) => {
       const url = req.url();
-      const type = req.resourceType();
-      if (!['image', 'font', 'stylesheet', 'other'].includes(type)) {
-        console.log(`[bintv:req] ${type.padEnd(10)} ${url.slice(0, 110)}`);
-      }
       if (!dyngutterReferer && url.includes('.dyngutter.net')) {
         try { dyngutterReferer = new URL(url).origin + '/'; } catch { /* ignore */ }
       }
       if (url.includes('.m3u8') && !url.includes('sporttsonline')) {
-        networkM3u8 = url;
         console.log(`[bintv] ${channelId}: m3u8 via network → ${url.slice(0, 100)}`);
+        _resolveM3u8(url);
       }
     });
 
     const page = await ctx.newPage();
 
+    // Close any popup that ad scripts open via window.open().  We register this
+    // AFTER ctx.newPage() so it doesn't fire on our own main page.
+    ctx.on('page', async (popup: import('playwright').Page) => {
+      if (popup !== page) {
+        console.log(`[bintv] closing ad popup: ${popup.url().slice(0, 60)}`);
+        await popup.close().catch(() => {});
+      }
+    });
+
+    // Block main-frame navigations to ad sites so that a stray click on an ad overlay
+    // can't send the page to DuckDuckGo/AliExpress and kill the player context.
+    // Only main-frame document requests are filtered; iframe navigations are left alone
+    // (dyngutter.net iframe must load freely).
+    await page.route('**', async (route) => {
+      const req = route.request();
+      const isMainFrameNav = req.resourceType() === 'document'
+                          && req.isNavigationRequest()
+                          && req.frame() === page.mainFrame();
+      if (isMainFrameNav) {
+        const url = req.url();
+        const ok = url.includes('sporttsonline.click') || url.startsWith('about:') || url.startsWith('data:');
+        if (!ok) {
+          console.log(`[bintv] blocked ad nav → ${url.slice(0, 80)}`);
+          return route.abort('aborted');
+        }
+      }
+      return route.continue();
+    });
+
     console.log(`[bintv] ${channelId}: navigating…`);
     await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 25_000 })
       .catch((e: Error) => console.warn(`[bintv] goto: ${e.message}`));
 
-    // First click: triggers the ad-gated "click to show player" mechanism
-    console.log(`[bintv] ${channelId}: click 1 (player gate)`);
-    await page.mouse.click(640, 360).catch(() => {});
+    // Click 1 at (300, 300) — safe area that triggers the player-gate overlay without
+    // landing on an ad overlay at page center.  SwarmCloud fetches the m3u8 manifest
+    // via HTTP (visible to Playwright) before routing segments to web workers.
+    console.log(`[bintv] ${channelId}: click 1`);
+    await page.mouse.click(300, 300).catch(() => {});
 
-    // Wait for Clappr + stream.js to load and decode _econfig
-    // stream.js appears ~3-4s after the click in the logs
-    await page.waitForRequest(req => req.url().includes('clappr'), { timeout: 12_000 })
-      .catch(() => {});
-    await new Promise(r => setTimeout(r, 3_000));
+    // Give the player 10s to init; if we don't have the URL yet, do a second click
+    // at (640, 360) to trigger play — mirroring the debug endpoint sequence that works.
+    const m3u8 = await Promise.race([
+      m3u8Promise,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error('first-wait')), 12_000)),
+    ]).catch(async () => {
+      console.log(`[bintv] ${channelId}: click 2 (play)`);
+      await page.mouse.click(640, 360).catch(() => {});
+      return Promise.race([
+        m3u8Promise,
+        new Promise<string>((_, rej) => setTimeout(() => rej(new Error('timeout')), 13_000)),
+      ]).catch(() => '');
+    });
 
-    // If we already have it from network, use it
-    if (networkM3u8) return { m3u8Url: networkM3u8, referer: dyngutterReferer || pageUrl };
-
-    // Try to read from player JS context (primary path for SwarmCloud P2P sites)
-    let m3u8 = await _extractFromPlayerContext(page);
-    if (m3u8) {
-      console.log(`[bintv] ${channelId}: extracted from player JS → ${m3u8.slice(0, 100)}`);
-      return { m3u8Url: m3u8, referer: dyngutterReferer || pageUrl };
+    if (!m3u8) {
+      // Last resort: read from player JS context (in case Worker intercept missed it)
+      const fromPlayer = await _extractFromPlayerContext(page);
+      if (fromPlayer) {
+        console.log(`[bintv] ${channelId}: extracted from player JS → ${fromPlayer.slice(0, 100)}`);
+        return { m3u8Url: fromPlayer, referer: dyngutterReferer || pageUrl };
+      }
+      console.warn(`[bintv] ${channelId}: all extraction methods failed`);
+      return null;
     }
 
-    // Second click: in case player rendered a "click to play" button
-    console.log(`[bintv] ${channelId}: click 2 (play button)`);
-    await page.mouse.click(640, 360).catch(() => {});
-    await new Promise(r => setTimeout(r, 4_000));
-
-    if (networkM3u8) return { m3u8Url: networkM3u8, referer: dyngutterReferer || pageUrl };
-    m3u8 = await _extractFromPlayerContext(page);
-    if (m3u8) {
-      console.log(`[bintv] ${channelId}: extracted from player JS (2nd) → ${m3u8.slice(0, 100)}`);
-      return { m3u8Url: m3u8, referer: dyngutterReferer || pageUrl };
-    }
-
-    console.warn(`[bintv] ${channelId}: all extraction methods failed`);
-    return null;
+    return { m3u8Url: m3u8, referer: dyngutterReferer || pageUrl };
   } catch (e) {
     console.warn('[bintv] Playwright error:', (e as Error).message);
     return null;
