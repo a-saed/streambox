@@ -129,8 +129,6 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
           liveSync: true,
           liveSyncTargetLatency: 8,       // target 8 s behind live edge
           liveSyncPlaybackRate: 1.1,      // chase at 1.1× speed when behind
-          // Abort and retry a segment if it takes >15 s — avoids hanging on a bad segment
-          fetchBeforeUnlock: true,
         },
       );
       mpegtsRef.current = player;
