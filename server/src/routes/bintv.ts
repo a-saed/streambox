@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { getSharedBrowser } from '../services/browser';
+import { getSharedBrowser, makeProxyContextOptions } from '../services/browser';
 
 const router = Router();
 
@@ -30,6 +30,7 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
         // sporttsonline expects to be embedded from prabashsapkota.github.io
         'Referer': 'https://prabashsapkota.github.io/',
       },
+      ...makeProxyContextOptions(),
     });
 
     const page = await ctx.newPage();

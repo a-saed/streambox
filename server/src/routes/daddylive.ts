@@ -6,16 +6,23 @@ import {
   getCachedSignedUrl, setCachedSignedUrl, evictSignedUrl,
   fetchSignedUrl, EMBED_HOST, CDN_HOST, EMBED_UA as UA,
 } from '../services/daddyliveSignedUrl';
-import { getSharedBrowser } from '../services/browser';
+import { getSharedBrowser, makeProxyContextOptions } from '../services/browser';
 
 const router = Router();
 
 async function _playwrightPath(id: number): Promise<string | null> {
   console.log(`[daddylive] ${id}: falling back to Playwright`);
-  let page;
+  let ctx;
   try {
     const browser = await getSharedBrowser();
-    page = await browser.newPage();
+    ctx = await browser.newContext({
+      ...makeProxyContextOptions(),
+      extraHTTPHeaders: {
+        'Referer': `https://dlhd.pk/stream/stream-${id}.php`,
+        'Origin':  'https://dlhd.pk',
+      },
+    });
+    const page = await ctx.newPage();
 
     // Block ads/trackers so the page loads faster
     await page.route('**/*', route => {
@@ -29,16 +36,11 @@ async function _playwrightPath(id: number): Promise<string | null> {
       return route.continue();
     });
 
-    await page.setExtraHTTPHeaders({
-      'Referer': `https://dlhd.pk/stream/stream-${id}.php`,
-      'Origin':  'https://dlhd.pk',
-    });
-
     // Intercept the first m3u8 CDN request — this is the signed URL we need
     const signedUrl = await new Promise<string | null>(async (resolve) => {
       const timer = setTimeout(() => resolve(null), 12_000);
 
-      page!.on('request', (browserReq: PwRequest) => {
+      page.on('request', (browserReq: PwRequest) => {
         const url = browserReq.url();
         if (url.includes(CDN_HOST) && url.includes('.m3u8') && url.includes('md5')) {
           clearTimeout(timer);
@@ -47,7 +49,7 @@ async function _playwrightPath(id: number): Promise<string | null> {
       });
 
       try {
-        await page!.goto(`${EMBED_HOST}/premiumtv/daddy4.php?id=${id}`, {
+        await page.goto(`${EMBED_HOST}/premiumtv/daddy4.php?id=${id}`, {
           waitUntil: 'domcontentloaded',
           timeout: 12_000,
         });
@@ -61,7 +63,7 @@ async function _playwrightPath(id: number): Promise<string | null> {
     console.warn(`[daddylive] Playwright error for ${id}:`, (e as Error).message);
     return null;
   } finally {
-    await page?.close().catch(() => {});
+    await ctx?.close().catch(() => {});
   }
 }
 
