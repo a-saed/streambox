@@ -48,6 +48,18 @@ export function initDb(dbPath?: string): void {
       codec       TEXT,                      -- 'h264' | 'hevc' | NULL (offline)
       verified_at INTEGER NOT NULL DEFAULT 0 -- unix ms of last check
     );
+
+    CREATE TABLE IF NOT EXISTS sport_pool (
+      url          TEXT NOT NULL,
+      channel_id   TEXT NOT NULL,
+      source       TEXT NOT NULL,
+      added_at     INTEGER NOT NULL,
+      last_checked INTEGER NOT NULL DEFAULT 0,
+      alive        INTEGER NOT NULL DEFAULT 1,
+      fail_count   INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (url, channel_id)
+    );
+    CREATE INDEX IF NOT EXISTS sport_pool_channel_idx ON sport_pool(channel_id);
   `);
 }
 
@@ -238,4 +250,54 @@ export function getChannelsToVerify(
 /** @deprecated Use getChannelsToVerify with separate live/offline thresholds */
 export function getStaleDLIds(knownIds: number[], staleMsThreshold: number): number[] {
   return getChannelsToVerify(knownIds, staleMsThreshold, staleMsThreshold);
+}
+
+// ── Sport pool ────────────────────────────────────────────────────────────────
+
+export interface SportPoolRow {
+  url: string;
+  channelId: string;
+  source: string;
+  addedAt: number;
+  lastChecked: number;
+  alive: boolean;
+  failCount: number;
+}
+
+export function upsertSportPoolEntry(entry: SportPoolRow): void {
+  db().prepare(`
+    INSERT INTO sport_pool (url, channel_id, source, added_at, last_checked, alive, fail_count)
+    VALUES (@url, @channelId, @source, @addedAt, @lastChecked, @alive, @failCount)
+    ON CONFLICT(url, channel_id) DO UPDATE SET
+      source       = excluded.source,
+      last_checked = excluded.last_checked,
+      alive        = excluded.alive,
+      fail_count   = excluded.fail_count
+  `).run({
+    ...entry,
+    alive: entry.alive ? 1 : 0,
+  });
+}
+
+export function updateSportPoolHealth(url: string, alive: boolean, failCount: number): void {
+  db().prepare(`
+    UPDATE sport_pool SET alive = ?, fail_count = ?, last_checked = ? WHERE url = ?
+  `).run(alive ? 1 : 0, failCount, Date.now(), url);
+}
+
+export function loadSportPoolEntries(): SportPoolRow[] {
+  const rows = db().prepare(`SELECT * FROM sport_pool`).all() as Array<Record<string, unknown>>;
+  return rows.map(r => ({
+    url:         r['url'] as string,
+    channelId:   r['channel_id'] as string,
+    source:      r['source'] as string,
+    addedAt:     r['added_at'] as number,
+    lastChecked: r['last_checked'] as number,
+    alive:       Boolean(r['alive']),
+    failCount:   r['fail_count'] as number,
+  }));
+}
+
+export function deleteSportPoolEntry(url: string): void {
+  db().prepare(`DELETE FROM sport_pool WHERE url = ?`).run(url);
 }
