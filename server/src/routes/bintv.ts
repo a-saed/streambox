@@ -184,24 +184,50 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
     `);
 
     const result = await new Promise<{ m3u8Url: string; referer: string } | null>((resolve) => {
-      const timer = setTimeout(() => resolve(null), 35_000);
+      const timer = setTimeout(() => {
+        console.warn(`[bintv] ${channelId}: 35s timeout — no m3u8 intercepted`);
+        resolve(null);
+      }, 35_000);
       let dyngutterReferer = '';
 
       ctx!.on('request', (req: import('playwright').Request) => {
         const url = req.url();
+        const type = req.resourceType();
+        // Log all non-trivial requests so we can trace the flow in server logs
+        if (!['image', 'font', 'stylesheet', 'other'].includes(type)) {
+          console.log(`[bintv:req] ${type.padEnd(10)} ${url.slice(0, 110)}`);
+        }
         if (!dyngutterReferer && url.includes('.dyngutter.net')) {
           try { dyngutterReferer = new URL(url).origin + '/'; } catch { /* ignore */ }
+          console.log(`[bintv] ${channelId}: dyngutter referer = ${dyngutterReferer}`);
         }
-        // Match any m3u8 that isn't from sporttsonline itself
         if (url.includes('.m3u8') && !url.includes('sporttsonline')) {
           clearTimeout(timer);
+          console.log(`[bintv] ${channelId}: M3U8 intercepted → ${url.slice(0, 100)}`);
           resolve({ m3u8Url: url, referer: dyngutterReferer || pageUrl });
         }
       });
 
+      ctx!.on('requestfailed', (req: import('playwright').Request) => {
+        const url = req.url();
+        if (!['image', 'font', 'stylesheet'].includes(req.resourceType())) {
+          console.warn(`[bintv:fail] ${url.slice(0, 100)} — ${req.failure()?.errorText}`);
+        }
+      });
+
+      ctx!.on('response', (resp: import('playwright').Response) => {
+        const status = resp.status();
+        if (status >= 400) {
+          console.warn(`[bintv:${status}] ${resp.url().slice(0, 100)}`);
+        }
+      });
+
       page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 25_000 })
-        .then(async () => { await page.mouse.click(300, 300).catch(() => {}); })
-        .catch(() => {});
+        .then(async () => {
+          console.log(`[bintv] ${channelId}: page loaded — clicking`);
+          await page.mouse.click(300, 300).catch(() => {});
+        })
+        .catch((e: Error) => console.warn(`[bintv] ${channelId}: goto error — ${e.message}`));
     });
 
     return result;
@@ -240,6 +266,65 @@ async function _getStream(channelId: string): Promise<StreamEntry | null> {
   console.log(`[bintv] ${channelId}: Playwright → ${hit.m3u8Url.slice(0, 80)}`);
   return entry;
 }
+
+// ── Debug endpoint: run interception and return full request trace ────────────
+// GET /api/bintv/debug/:channelId — returns JSON with every URL Playwright saw
+router.get('/debug/:channelId', async (req: Request, res: Response) => {
+  const { channelId } = req.params;
+  if (!/^hd\d+$/.test(channelId)) return res.status(400).json({ error: 'invalid id' });
+
+  const pageUrl = `${SPORTTSONLINE_BASE}/${channelId}.php`;
+  const log: Array<{ type: string; url: string; status?: number; error?: string }> = [];
+  let ctx2;
+
+  try {
+    const browser = await getSharedBrowser();
+    ctx2 = await browser.newContext({
+      userAgent: UA,
+      viewport: { width: 1280, height: 720 },
+      ignoreHTTPSErrors: true,
+      ...makeProxyContextOptions(),
+    });
+
+    const page2 = await ctx2.newPage();
+    await ctx2.addInitScript(`Object.defineProperty(navigator,'webdriver',{get:()=>undefined});window.chrome={runtime:{id:undefined,connect:()=>{},sendMessage:()=>{}}};`);
+
+    const m3u8Found: string[] = [];
+
+    ctx2.on('request', (r: import('playwright').Request) => {
+      const url = r.url();
+      log.push({ type: r.resourceType(), url });
+      if (url.includes('.m3u8')) m3u8Found.push(url);
+    });
+    ctx2.on('requestfailed', (r: import('playwright').Request) => {
+      log.push({ type: 'FAILED', url: r.url(), error: r.failure()?.errorText });
+    });
+    ctx2.on('response', (r: import('playwright').Response) => {
+      if (r.status() >= 400) {
+        const existing = log.find(l => l.url === r.url());
+        if (existing) existing.status = r.status();
+        else log.push({ type: 'error-resp', url: r.url(), status: r.status() });
+      }
+    });
+
+    await page2.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 25_000 }).catch(() => {});
+    await page2.mouse.click(300, 300).catch(() => {});
+    await new Promise(r => setTimeout(r, 12_000)); // wait 12s for player to init
+    await page2.mouse.click(640, 360).catch(() => {});
+    await new Promise(r => setTimeout(r, 5_000));
+
+    return res.json({
+      pageUrl,
+      m3u8Found,
+      totalRequests: log.length,
+      requests: log.filter(l => !['image', 'font', 'stylesheet'].includes(l.type)),
+    });
+  } catch (e) {
+    return res.status(500).json({ error: (e as Error).message, log });
+  } finally {
+    await ctx2?.close().catch(() => {});
+  }
+});
 
 // ── Proxy: forward manifest/segment with correct Referer ──────────────────────
 router.get('/proxy', async (req: Request, res: Response) => {
