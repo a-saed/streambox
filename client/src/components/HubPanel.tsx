@@ -10,7 +10,6 @@ import {
   type HubStatus,
 } from '../lib/api';
 import type { Channel } from '../types';
-import { proxyStreamUrl } from '../lib/api';
 import { useStore } from '../store/useStore';
 
 interface StreamHit {
@@ -102,7 +101,7 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
   }, [source]);
 
   function play(ch: Channel) {
-    setActiveChannel({ ...ch, url: proxyStreamUrl(ch.url) });
+    setActiveChannel({ ...ch });
     setSidebarOpen(false);
   }
 
@@ -174,7 +173,7 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
             )}
             <div className="space-y-1">
               {chs.map(ch => {
-                const isPlaying = activeChannel?.url === proxyStreamUrl(ch.url);
+                const isPlaying = activeChannel?.url === ch.url;
                 return (
                   <button
                     key={ch.id}
