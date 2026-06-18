@@ -12,46 +12,55 @@ const CACHE_TTL_MS = 4 * 60 * 60 * 1000;
 interface StreamEntry { m3u8Url: string; referer: string; fetchedAt: number; }
 const _cache = new Map<string, StreamEntry>();
 
-// Extract dyngutter iframe URL from sporttsonline HTML (plain fetch, no JS needed)
-async function _getDyngutterReferer(channelId: string): Promise<string | null> {
-  try {
-    const r = await fetch(`${SPORTTSONLINE_BASE}/${channelId}.php`, {
-      headers: { 'User-Agent': UA, 'Referer': 'https://prabashsapkota.github.io/' },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!r.ok) return null;
-    const html = await r.text();
-    const m = html.match(/src="(https?:\/\/[a-f0-9]+\.dyngutter\.net\/e\/[a-z0-9]+)"/);
-    return m ? new URL(m[1]).origin + '/' : null;
-  } catch {
-    return null;
-  }
-}
-
-// Navigate to sporttsonline via Playwright; intercept m3u8 at context level so
-// dyngutter iframe requests are included (direct dyngutter navigation gets blocked)
-async function _interceptHLS(channelId: string, referer: string): Promise<string | null> {
+// Navigate sporttsonline via Playwright and intercept:
+//   1. The first request to *.dyngutter.net → dyngutter Referer header
+//   2. The HLS m3u8 URL from 15072669.net
+// Context-level interception catches cross-origin iframe requests.
+// We no longer gate on a plain-fetch pre-check because fly.io IPs may be
+// blocked by sporttsonline, causing an immediate null return before Playwright
+// even gets a chance.
+async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; referer: string } | null> {
   let ctx;
   try {
     const browser = await getSharedBrowser();
     ctx = await browser.newContext({
       userAgent: UA,
       ignoreHTTPSErrors: true,
+      extraHTTPHeaders: {
+        // sporttsonline expects to be embedded from prabashsapkota.github.io
+        'Referer': 'https://prabashsapkota.github.io/',
+      },
     });
+
     const page = await ctx.newPage();
 
-    const result = await new Promise<string | null>((resolve) => {
-      const timer = setTimeout(() => resolve(null), 30_000);
+    // Spoof visibility so auto-play streams start without a user gesture
+    await page.addInitScript(() => {
+      Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+      Object.defineProperty(document, 'hidden', { get: () => false });
+    });
+
+    const result = await new Promise<{ m3u8Url: string; referer: string } | null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), 35_000);
+      let dyngutterReferer = '';
+
       ctx!.on('request', (req: import('playwright').Request) => {
         const url = req.url();
+
+        // Capture dyngutter subdomain for Referer header on manifest/segment requests
+        if (!dyngutterReferer && url.includes('.dyngutter.net')) {
+          try { dyngutterReferer = new URL(url).origin + '/'; } catch { /* ignore */ }
+        }
+
         if (url.includes('15072669.net') && url.includes('.m3u8')) {
           clearTimeout(timer);
-          resolve(url);
+          resolve({ m3u8Url: url, referer: dyngutterReferer });
         }
       });
+
       page.goto(`${SPORTTSONLINE_BASE}/${channelId}.php`, {
         waitUntil: 'domcontentloaded',
-        timeout: 20_000,
+        timeout: 25_000,
       }).catch(() => {});
     });
 
@@ -68,24 +77,21 @@ async function _getStream(channelId: string): Promise<StreamEntry | null> {
   const cached = _cache.get(channelId);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached;
 
-  // Fetch dyngutter origin for Referer header (plain HTTP, fast)
-  const referer = await _getDyngutterReferer(channelId);
-  if (!referer) {
-    console.warn(`[bintv] ${channelId}: no dyngutter iframe found`);
-    return null;
-  }
-  console.log(`[bintv] ${channelId}: referer = ${referer}`);
+  console.log(`[bintv] ${channelId}: intercepting HLS via Playwright…`);
+  const hit = await _interceptHLS(channelId);
 
-  // Launch browser, navigate sporttsonline, intercept m3u8
-  const m3u8Url = await _interceptHLS(channelId, referer);
-  if (!m3u8Url) {
+  if (!hit?.m3u8Url) {
     console.warn(`[bintv] ${channelId}: HLS intercept failed`);
     return null;
   }
+  if (!hit.referer) {
+    console.warn(`[bintv] ${channelId}: no dyngutter referer captured`);
+    return null;
+  }
 
-  const entry: StreamEntry = { m3u8Url, referer, fetchedAt: Date.now() };
+  const entry: StreamEntry = { m3u8Url: hit.m3u8Url, referer: hit.referer, fetchedAt: Date.now() };
   _cache.set(channelId, entry);
-  console.log(`[bintv] ${channelId}: stream cached ${m3u8Url.slice(0, 80)}`);
+  console.log(`[bintv] ${channelId}: cached ${hit.m3u8Url.slice(0, 80)}`);
   return entry;
 }
 
@@ -129,7 +135,7 @@ router.get('/:channelId', async (req: Request, res: Response) => {
   let entry = await _getStream(channelId);
   if (!entry) return res.status(503).json({ error: 'stream unavailable' });
 
-  // Fetch the manifest (retry once on 403 — URL may have expired)
+  // Fetch the manifest (retry once on 403 — signed URL may have expired)
   let text: string | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -143,7 +149,6 @@ router.get('/:channelId', async (req: Request, res: Response) => {
       });
       if (r.ok) { text = await r.text(); break; }
       if (r.status === 403 || r.status === 401) {
-        // Signed URL expired — evict and re-extract
         _cache.delete(channelId);
         entry = await _getStream(channelId);
         if (!entry) break;
@@ -153,7 +158,6 @@ router.get('/:channelId', async (req: Request, res: Response) => {
 
   if (!text || !entry) return res.status(503).json({ error: 'manifest unavailable' });
 
-  // Resolve relative segment paths and rewrite through our proxy
   const liveEntry = entry;
   const baseUrl = new URL(liveEntry.m3u8Url);
   const baseDir = baseUrl.origin + baseUrl.pathname.replace(/\/[^/]*$/, '/');
