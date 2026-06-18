@@ -10,7 +10,7 @@ import {
 import { buildChannelsFromPortal, scrapeAndVerify } from './services/xtreamVerifier';
 import { scrapeDaddyliveChannels, type DLChannelMeta } from './services/daddyliveSource';
 import { checkChannelLive } from './services/daddyliveSignedUrl';
-import { initSportsPool } from './services/sportsPool';
+import { initSportsPool, markResult } from './services/sportsPool';
 import { mapDLChannelsToPool } from './services/dlChannelMapper';
 import { loadBeInM3uSources, startBeInM3uRefresh } from './services/beInM3uSource';
 import { startTelegramSource } from './services/telegramSource';
@@ -349,7 +349,10 @@ function _dlRowToChannel(row: DLChannelRow): Channel {
 function _loadDLFromDb(): void {
   const rows = loadLiveDLChannels();
   if (!rows.length) return;
-  _mergeIn(rows.map(_dlRowToChannel));
+  const channels = rows.map(_dlRowToChannel);
+  _mergeIn(channels);
+  // Sync to sports pool immediately so hub shows beIN Sports on first load
+  mapDLChannelsToPool(channels.map(c => ({ name: c.name, url: c.url })));
   console.log(`[cache] DaddyLive: loaded ${rows.length} live channels from DB`);
 }
 
@@ -374,14 +377,18 @@ async function _verifyBatch(metas: DLChannelMeta[]): Promise<void> {
       });
 
       if (codec) {
-        // Channel is live — inject into pool with correct URL
-        _mergeIn([_dlRowToChannel({ id: meta.id, name: meta.name, category: meta.category, codec, verified_at: now })]);
+        // Channel is live — inject into main pool and update sports pool
+        const ch = _dlRowToChannel({ id: meta.id, name: meta.name, category: meta.category, codec, verified_at: now });
+        _mergeIn([ch]);
+        mapDLChannelsToPool([{ name: ch.name, url: ch.url }]);
       } else {
-        // Channel went offline — evict from pool
+        // Channel went offline — evict from main pool and mark dead in sports pool
         const base = _dlBaseUrl(meta.id);
         const ts   = _dlTsUrl(meta.id);
         _channels   = _channels.filter(c => c.url !== base && c.url !== ts);
         _categories = [...new Set(_channels.map(c => c.category))].sort();
+        markResult(base, false);
+        markResult(ts, false);
       }
     }));
 

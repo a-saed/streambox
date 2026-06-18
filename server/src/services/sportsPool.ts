@@ -22,13 +22,20 @@ const SKIP_IF_CHECKED_WITHIN   = 4 * 60 * 1000;
 const _pool = new Map<string, PoolEntry[]>();
 
 export function addUrls(channelId: string, entries: Array<{ url: string; source: PoolSource }>): void {
-  const existing    = _pool.get(channelId) ?? [];
-  const existingSet = new Set(existing.map(e => e.url));
+  const existing = _pool.get(channelId) ?? [];
   for (const { url, source } of entries) {
-    if (existingSet.has(url)) continue;
+    const hit = existing.find(e => e.url === url);
+    if (hit) {
+      // URL already tracked — revive it if dead (source is confirming it's live again)
+      if (!hit.alive || hit.failCount > 0) {
+        hit.alive     = true;
+        hit.failCount = 0;
+        updateSportPoolHealth(url, true, 0);
+      }
+      continue;
+    }
     const entry: PoolEntry = { url, source, addedAt: Date.now(), lastChecked: 0, alive: true, failCount: 0 };
     existing.push(entry);
-    existingSet.add(url);
     upsertSportPoolEntry({ url, channelId, source, addedAt: entry.addedAt, lastChecked: 0, alive: true, failCount: 0 });
   }
   _pool.set(channelId, existing);
@@ -65,10 +72,18 @@ export function getPoolStats(): Array<{ channelId: string; aliveCount: number; t
   }));
 }
 
+function _isProxyUrl(url: string): boolean {
+  return !url.startsWith('http://') && !url.startsWith('https://');
+}
+
 function _evictDeadEntries(): void {
   for (const [channelId, entries] of _pool.entries()) {
-    const keep = entries.filter(e => e.failCount < 2);
-    entries.filter(e => e.failCount >= 2).forEach(e => deleteSportPoolEntry(e.url));
+    // Never evict internal proxy URLs — their lifecycle is managed by their own
+    // verify cycles (DL every 5-30 min, bintv every 2h), not the health checker.
+    const keep = entries.filter(e => _isProxyUrl(e.url) || e.failCount < 2);
+    entries
+      .filter(e => !_isProxyUrl(e.url) && e.failCount >= 2)
+      .forEach(e => deleteSportPoolEntry(e.url));
     _pool.set(channelId, keep);
   }
 }
@@ -87,6 +102,10 @@ async function _runHealthCheck(): Promise<void> {
   const now = Date.now();
   for (const entries of _pool.values()) {
     for (const entry of entries) {
+      // Internal proxy URLs (/api/daddylive/*, /api/bintv/*) are not direct HTTP
+      // streams — fetching them would fail and falsely mark them dead. Their freshness
+      // is managed by the DL verify cycle and bintv refresh, not the health checker.
+      if (_isProxyUrl(entry.url)) continue;
       if (now - entry.lastChecked < SKIP_IF_CHECKED_WITHIN) continue;
       toCheck.push({ url: entry.url });
     }
