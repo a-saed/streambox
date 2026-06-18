@@ -48,6 +48,16 @@ export function initDb(dbPath?: string): void {
       codec       TEXT,                      -- 'h264' | 'hevc' | NULL (offline)
       verified_at INTEGER NOT NULL DEFAULT 0 -- unix ms of last check
     );
+
+    CREATE TABLE IF NOT EXISTS sport_pool (
+      url          TEXT PRIMARY KEY,
+      channel_id   TEXT    NOT NULL,
+      source       TEXT    NOT NULL,
+      added_at     INTEGER NOT NULL DEFAULT 0,
+      last_checked INTEGER NOT NULL DEFAULT 0,
+      alive        INTEGER NOT NULL DEFAULT 1,
+      fail_count   INTEGER NOT NULL DEFAULT 0
+    );
   `);
 }
 
@@ -238,4 +248,58 @@ export function getChannelsToVerify(
 /** @deprecated Use getChannelsToVerify with separate live/offline thresholds */
 export function getStaleDLIds(knownIds: number[], staleMsThreshold: number): number[] {
   return getChannelsToVerify(knownIds, staleMsThreshold, staleMsThreshold);
+}
+
+// ─── Sport Pool ──────────────────────────────────────────────────────────────
+
+export interface SportPoolRow {
+  url: string;
+  channelId: string;
+  source: string;
+  addedAt: number;
+  lastChecked: number;
+  alive: boolean;
+  failCount: number;
+}
+
+export function upsertSportPoolEntry(row: SportPoolRow): void {
+  db().prepare(`
+    INSERT INTO sport_pool (url, channel_id, source, added_at, last_checked, alive, fail_count)
+    VALUES (@url, @channelId, @source, @addedAt, @lastChecked, @alive, @failCount)
+    ON CONFLICT(url) DO UPDATE SET
+      channel_id   = excluded.channel_id,
+      source       = excluded.source,
+      added_at     = excluded.added_at,
+      last_checked = excluded.last_checked,
+      alive        = excluded.alive,
+      fail_count   = excluded.fail_count
+  `).run({ ...row, alive: row.alive ? 1 : 0 });
+}
+
+export function updateSportPoolHealth(url: string, alive: boolean, failCount: number): void {
+  db().prepare(`
+    UPDATE sport_pool SET alive = @alive, fail_count = @failCount, last_checked = @lastChecked WHERE url = @url
+  `).run({ url, alive: alive ? 1 : 0, failCount, lastChecked: Date.now() });
+}
+
+export function loadSportPoolEntries(): SportPoolRow[] {
+  const rows = db().prepare(
+    'SELECT url, channel_id, source, added_at, last_checked, alive, fail_count FROM sport_pool'
+  ).all() as Array<{
+    url: string; channel_id: string; source: string;
+    added_at: number; last_checked: number; alive: number; fail_count: number;
+  }>;
+  return rows.map(r => ({
+    url: r.url,
+    channelId: r.channel_id,
+    source: r.source,
+    addedAt: r.added_at,
+    lastChecked: r.last_checked,
+    alive: r.alive === 1,
+    failCount: r.fail_count,
+  }));
+}
+
+export function deleteSportPoolEntry(url: string): void {
+  db().prepare('DELETE FROM sport_pool WHERE url = @url').run({ url });
 }
