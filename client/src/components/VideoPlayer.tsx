@@ -61,12 +61,12 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
     video.addEventListener('waiting', onWaiting);
     video.addEventListener('playing', onPlaying);
 
-    // Startup watchdog: if the video hasn't produced any frames within 10 s,
-    // the stream connected but sent no data (empty body, stalled CDN, etc.).
-    // The stall detector won't fire because readyState never reaches 2.
+    // bintv manifests are served from a fly.io Playwright cache; allow extra time
+    // in case the cache is cold and Playwright needs to intercept the HLS URL.
+    const startupWatchdogMs = url.startsWith('/api/bintv/') ? 50_000 : 10_000;
     startupTimerRef.current = setTimeout(() => {
       if (video.readyState < 2) scheduleAutoRetry();
-    }, 10_000);
+    }, startupWatchdogMs);
 
     // Auto-retry with backoff before giving up and showing the error screen
     function scheduleAutoRetry() {
@@ -170,10 +170,12 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
         abrEwmaFastLive: 3.0,
         abrEwmaSlowLive: 9.0,
 
-        // Generous timeouts — live IPTV CDNs are occasionally slow
+        // Generous timeouts — live IPTV CDNs are occasionally slow.
+        // bintv manifests are served from a Playwright cache that may need
+        // up to 30s to warm; give it 50s to match the startup watchdog.
         fragLoadingTimeOut: 15_000,
-        manifestLoadingTimeOut: 10_000,
-        levelLoadingTimeOut: 10_000,
+        manifestLoadingTimeOut: url.startsWith('/api/bintv/') ? 50_000 : 10_000,
+        levelLoadingTimeOut: url.startsWith('/api/bintv/') ? 50_000 : 10_000,
         fragLoadingMaxRetry: 4,
         manifestLoadingMaxRetry: 3,
         levelLoadingMaxRetry: 3,
