@@ -3,6 +3,7 @@ import { Play, RefreshCw, Satellite, ChevronLeft, Wifi, Search, Radio } from 'lu
 import {
   fetchHubChannels,
   fetchHubStatus,
+  fetchHubBest,
   fetchSourceChannels,
   discoverPortals,
   scanHubChannel,
@@ -231,9 +232,10 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
 interface ScanPanelProps {
   channel: HubChannel;
   onBack: () => void;
+  onScanDone?: () => void;
 }
 
-function ScanPanel({ channel, onBack }: ScanPanelProps) {
+function ScanPanel({ channel, onBack, onScanDone }: ScanPanelProps) {
   const setActiveChannel = useStore(s => s.setActiveChannel);
   const setSidebarOpen   = useStore(s => s.setSidebarOpen);
   const activeChannel    = useStore(s => s.activeChannel);
@@ -261,8 +263,9 @@ function ScanPanel({ channel, onBack }: ScanPanelProps) {
       onDone:      (n, message) => {
         setDone(true);
         setDoneMsg(message ?? `Found ${n} working stream${n !== 1 ? 's' : ''}`);
+        onScanDone?.();
       },
-      onError:     msg => { setDone(true); setDoneMsg(`Error: ${msg}`); },
+      onError:     msg => { setDone(true); setDoneMsg(`Error: ${msg}`); onScanDone?.(); },
     });
   }
 
@@ -403,12 +406,17 @@ const SOURCES = ['daddylive', 'bintv'] as const;
 type SourceId = typeof SOURCES[number];
 
 export function HubPanel({ onChannelSelect }: HubPanelProps) {
+  const liveHubChannelIds = useStore(s => s.liveHubChannelIds);
+  const setActiveChannel  = useStore(s => s.setActiveChannel);
+  const setSidebarOpen    = useStore(s => s.setSidebarOpen);
+
   const [channels, setChannels] = useState<HubChannel[]>([]);
   const [status, setStatus]     = useState<HubStatus | null>(null);
   const [selected, setSelected] = useState<HubChannel | null>(null);
   const [discovering, setDiscovering] = useState(false);
   const [filter, setFilter]     = useState<string>('all');
   const [activeSource, setActiveSource] = useState<SourceId | null>(null);
+  const [scanningChannelId, setScanningChannelId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchHubChannels().then(setChannels);
@@ -426,8 +434,24 @@ export function HubPanel({ onChannelSelect }: HubPanelProps) {
   }
 
   function handleSelect(ch: HubChannel) {
+    setScanningChannelId(ch.id);
     setSelected(ch);
     onChannelSelect?.(ch);
+  }
+
+  async function handleInstantPlay(ch: HubChannel) {
+    const best = await fetchHubBest(ch.id);
+    if (!best) {
+      handleSelect(ch);
+      return;
+    }
+    const channel: Channel = {
+      id: ch.id, name: ch.name, logo: '',
+      url: best.url, sources: [best.url],
+      category: ch.category ?? '', country: '', language: '',
+    };
+    setActiveChannel(channel, [best.url]);
+    setSidebarOpen(false);
   }
 
   if (activeSource) {
@@ -435,7 +459,13 @@ export function HubPanel({ onChannelSelect }: HubPanelProps) {
   }
 
   if (selected) {
-    return <ScanPanel channel={selected} onBack={() => setSelected(null)} />;
+    return (
+      <ScanPanel
+        channel={selected}
+        onBack={() => { setSelected(null); setScanningChannelId(null); }}
+        onScanDone={() => setScanningChannelId(null)}
+      />
+    );
   }
 
   const grouped = CATEGORY_ORDER.reduce<Record<string, HubChannel[]>>((acc, cat) => {
@@ -447,23 +477,39 @@ export function HubPanel({ onChannelSelect }: HubPanelProps) {
   return (
     <div className="flex flex-col h-full gap-3">
       {/* Portal status bar */}
-      <div className="flex items-center gap-2 px-0.5">
-        <Satellite size={12} className="text-indigo-400 flex-shrink-0" />
-        <span className="text-[11px] text-zinc-500 flex-1">
-          {status
-            ? `${status.portalCount} portal${status.portalCount !== 1 ? 's' : ''} · ${status.channelCount.toLocaleString()} channels`
-            : 'Loading…'}
-        </span>
-        <button
-          onClick={handleDiscover}
-          disabled={discovering}
-          className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md
-            bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 hover:text-indigo-300
-            disabled:opacity-50 transition-all"
-        >
-          <RefreshCw size={9} className={discovering ? 'animate-spin' : ''} />
-          {discovering ? 'Discovering…' : 'Discover more'}
-        </button>
+      <div className="flex flex-col gap-1 px-0.5">
+        <div className="flex items-center gap-2">
+          <Satellite size={12} className="text-indigo-400 flex-shrink-0" />
+          <span className="text-[11px] text-zinc-500 flex-1">
+            {status ? (
+              <>
+                <span className="text-green-400 font-medium">{status.liveCount} live</span>
+                {' · '}
+                {status.portalCount} portal{status.portalCount !== 1 ? 's' : ''}
+                {' · '}
+                {status.channelCount.toLocaleString()} channels
+              </>
+            ) : 'Loading…'}
+          </span>
+          <button
+            onClick={handleDiscover}
+            disabled={discovering}
+            className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md
+              bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 hover:text-indigo-300
+              disabled:opacity-50 transition-all"
+          >
+            <RefreshCw size={9} className={discovering ? 'animate-spin' : ''} />
+            {discovering ? 'Discovering…' : 'Discover more'}
+          </button>
+        </div>
+        {status && status.liveCount > 0 && (
+          <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-indigo-500 rounded-full transition-all duration-700"
+              style={{ width: `${Math.min(100, (status.liveCount / 150) * 100)}%` }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Source buttons */}
@@ -506,23 +552,44 @@ export function HubPanel({ onChannelSelect }: HubPanelProps) {
               {CATEGORY_LABELS[cat] ?? cat}
             </h3>
             <div className="grid grid-cols-3 gap-1.5">
-              {chs.map(ch => (
-                <button
-                  key={ch.id}
-                  onClick={() => handleSelect(ch)}
-                  className="flex flex-col items-center gap-1 p-2 rounded-xl
-                    bg-zinc-800/60 hover:bg-zinc-700/60 border border-zinc-700/30
-                    hover:border-indigo-500/40 transition-all group"
-                >
-                  <span className="text-[9px] font-bold text-zinc-300 group-hover:text-white
-                    transition-colors leading-none text-center line-clamp-2 min-h-[2.5em]">
-                    {ch.short}
-                  </span>
-                  <span className="text-[8px] text-zinc-600 truncate w-full text-center">
-                    {ch.name}
-                  </span>
-                </button>
-              ))}
+              {chs.map(ch => {
+                const isLive     = liveHubChannelIds.has(ch.id);
+                const isScanning = scanningChannelId === ch.id;
+
+                return (
+                  <button
+                    key={ch.id}
+                    onClick={() => isLive ? handleInstantPlay(ch) : handleSelect(ch)}
+                    className={`relative flex flex-col items-center gap-1 p-2 rounded-xl border transition-all group
+                      ${isLive
+                        ? 'bg-zinc-800/60 hover:bg-zinc-700/60 border-zinc-700/30 hover:border-indigo-500/40'
+                        : 'bg-zinc-800/60 hover:bg-zinc-700/60 border-zinc-700/30 hover:border-zinc-600/40'
+                      }`}
+                  >
+                    {/* Health dot */}
+                    {isScanning ? (
+                      <span className="absolute bottom-1.5 left-1.5 w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                    ) : isLive ? (
+                      <span className="absolute bottom-1.5 left-1.5 w-1.5 h-1.5 rounded-full bg-green-500" />
+                    ) : null}
+
+                    {/* Action icon */}
+                    {isLive
+                      ? <Play size={9} className="absolute bottom-1.5 right-1.5 text-indigo-400 fill-indigo-400" />
+                      : <Search size={9} className="absolute bottom-1.5 right-1.5 text-zinc-600" />
+                    }
+
+                    <span className={`text-[9px] font-bold transition-colors leading-none text-center line-clamp-2 min-h-[2.5em]
+                      ${isLive ? 'text-zinc-300 group-hover:text-white' : 'text-zinc-600 group-hover:text-zinc-400'}`}>
+                      {ch.short}
+                    </span>
+                    <span className={`text-[8px] truncate w-full text-center
+                      ${isLive ? 'text-zinc-600' : 'text-zinc-700'}`}>
+                      {ch.name}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         ))}
