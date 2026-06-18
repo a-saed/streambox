@@ -19,15 +19,33 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
   const stallIntervalRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const startupTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevChannelUrl    = useRef<string | null>(null);
+  const sourceIndexRef    = useRef(0);
 
   const [status, setStatus]       = useState<'loading' | 'playing' | 'error'>('loading');
   const [buffering, setBuffering] = useState(false);
   const [retryKey, setRetryKey]   = useState(0);
+  const [switchingSource, setSwitchingSource] = useState(false);
+  const [sourceIndex,     setSourceIndex]     = useState(0);
+  const [showSourceChip,  setShowSourceChip]  = useState(false);
+
+  const sources = channel?.sources?.length ? channel.sources : (channel ? [channel.url] : []);
 
   const handleManualRetry = () => {
     autoRetryRef.current = 0; // manual retry resets the counter
+    sourceIndexRef.current = 0;
+    setSourceIndex(0);
+    setSwitchingSource(false);
+    setShowSourceChip(false);
     setRetryKey(k => k + 1);
   };
+
+  useEffect(() => {
+    if (sourceIndex > 0) {
+      setShowSourceChip(true);
+      const timer = setTimeout(() => setShowSourceChip(false), 4_000);
+      return () => clearTimeout(timer);
+    }
+  }, [sourceIndex]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -41,6 +59,10 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
     if (prevChannelUrl.current !== channel.url) {
       prevChannelUrl.current = channel.url;
       autoRetryRef.current = 0;
+      sourceIndexRef.current = 0;
+      setSourceIndex(0);
+      setSwitchingSource(false);
+      setShowSourceChip(false);
     }
 
     if (retryTimerRef.current)    { clearTimeout(retryTimerRef.current);     retryTimerRef.current    = null; }
@@ -50,12 +72,13 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
     hlsRef.current?.destroy();     hlsRef.current    = null;
     mpegtsRef.current?.destroy();  mpegtsRef.current = null;
 
-    const url = channel.url;
+    const url = sources[sourceIndexRef.current] ?? channel.url;
 
     const onWaiting = () => setBuffering(true);
     const onPlaying = () => {
       setBuffering(false);
       setStatus('playing');
+      setSwitchingSource(false);
       // Cancel the startup watchdog once video is actually playing
       if (startupTimerRef.current) { clearTimeout(startupTimerRef.current); startupTimerRef.current = null; }
     };
@@ -69,9 +92,22 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
       if (video.readyState < 2) scheduleAutoRetry();
     }, startupWatchdogMs);
 
+    // Try the next source in the sources array; fall through to error if exhausted
+    function tryNextSource() {
+      if (sourceIndexRef.current < sources.length - 1) {
+        sourceIndexRef.current++;
+        setSourceIndex(sourceIndexRef.current);
+        setSwitchingSource(true);
+        autoRetryRef.current = 0;
+        setRetryKey(k => k + 1);
+      } else {
+        setStatus('error');
+      }
+    }
+
     // Auto-retry with backoff before giving up and showing the error screen
     function scheduleAutoRetry() {
-      if (autoRetryRef.current >= 3) { setStatus('error'); return; }
+      if (autoRetryRef.current >= 3) { tryNextSource(); return; }
       autoRetryRef.current++;
       retryTimerRef.current = setTimeout(
         () => setRetryKey(k => k + 1),
@@ -190,6 +226,7 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         setStatus('playing');
+        setSwitchingSource(false);
         video.play().catch(() => {});
       });
 
@@ -298,7 +335,9 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
             </div>
           </div>
           <p className="text-zinc-200 text-sm font-medium tracking-wide">{channel.name}</p>
-          <p className="text-zinc-500 text-xs mt-1.5">Connecting…</p>
+          <p className="text-zinc-500 text-xs mt-1.5">
+            {switchingSource ? 'Trying next source…' : 'Connecting…'}
+          </p>
         </div>
       )}
 
@@ -309,6 +348,15 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
             <div className="w-3 h-3 rounded-full border border-transparent border-t-violet-400"
                  style={{ animation: 'orbit-cw 0.7s linear infinite' }} />
             <span className="text-zinc-400 text-[11px] tracking-wide">Buffering</span>
+          </div>
+        </div>
+      )}
+
+      {showSourceChip && sourceIndex > 0 && (
+        <div className="absolute top-4 left-4 pointer-events-none z-10"
+             style={{ animation: 'fade-up 0.2s ease-out' }}>
+          <div className="flex items-center gap-2 bg-black/70 backdrop-blur-md rounded-lg px-3 py-1.5 border border-white/[0.06]">
+            <span className="text-zinc-400 text-[11px] tracking-wide">Source {sourceIndex + 1}</span>
           </div>
         </div>
       )}
@@ -324,7 +372,9 @@ export function VideoPlayer({ channel }: VideoPlayerProps) {
             </div>
             <div className="space-y-1">
               <p className="text-white text-sm font-medium">Stream unavailable</p>
-              <p className="text-zinc-500 text-[11px] leading-relaxed">{channel.name}</p>
+              <p className="text-zinc-500 text-[11px] leading-relaxed">
+                {sources.length > 1 ? `Tried ${sources.length} source${sources.length !== 1 ? 's' : ''}` : channel.name}
+              </p>
             </div>
             <button
               onClick={handleManualRetry}
