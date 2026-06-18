@@ -34,11 +34,34 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
 
     const page = await ctx.newPage();
 
-    // Spoof visibility so auto-play streams start without a user gesture.
-    // Passed as a string so TypeScript doesn't check browser-only globals.
+    // Stealth patches — stream.js has devtools/automation detection.
+    // These run before any page script so the environment looks like a real browser.
     await page.addInitScript(`
+      // Remove webdriver flag (most common automation detector)
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+      // Add chrome runtime object (absent in headless, detected by many scripts)
+      window.chrome = {
+        runtime: { id: undefined, connect: () => {}, sendMessage: () => {} },
+        loadTimes: () => ({}),
+        csi: () => ({}),
+        app: { isInstalled: false },
+      };
+
+      // Fake plugins so navigator.plugins.length > 0
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => Object.assign([{ name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: '' }], { item: () => null, namedItem: () => null, refresh: () => {} }),
+      });
+
+      // Realistic languages
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+      // Visibility: streams may not start when tab is 'hidden'
       Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
-      Object.defineProperty(document, 'hidden', { get: () => false });
+      Object.defineProperty(document, 'hidden',          { get: () => false });
+
+      // Suppress devtools detector (runs via window.devtoolsDetector)
+      Object.defineProperty(window, 'devtoolsDetector', { get: () => undefined, set: () => {} });
     `);
 
     const result = await new Promise<{ m3u8Url: string; referer: string } | null>((resolve) => {
@@ -62,6 +85,9 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
       page.goto(`${SPORTTSONLINE_BASE}/${channelId}.php`, {
         waitUntil: 'domcontentloaded',
         timeout: 25_000,
+      }).then(async () => {
+        // Simulate user click to unblock autoplay-gated stream players
+        await page.mouse.click(300, 300).catch(() => {});
       }).catch(() => {});
     });
 
