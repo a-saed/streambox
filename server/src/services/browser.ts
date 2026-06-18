@@ -3,6 +3,12 @@ import { chromium, Browser } from 'playwright';
 let _browser: Browser | null = null;
 let _launching = false;
 
+export function makeProxyContextOptions(): Parameters<Browser['newContext']>[0] {
+  const proxyUrl = process.env.PROXY_URL;
+  if (!proxyUrl) return {};
+  return { proxy: { server: proxyUrl } };
+}
+
 export async function getSharedBrowser(): Promise<Browser> {
   if (_browser?.isConnected()) return _browser;
   if (_launching) {

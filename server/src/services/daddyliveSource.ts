@@ -117,22 +117,29 @@ export function parseChannelList(html: string): DLChannelMeta[] {
 
 // ── Scraper ───────────────────────────────────────────────────────────────────
 
-const LIST_URL = 'https://dlhd.pk/24-7-channels.php';
-const UA       = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const LIST_URLS = [
+  'https://dlhd.pk/24-7-channels.php',
+  'https://dlhd.sx/24-7-channels.php',
+];
+const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 export async function scrapeDaddyliveChannels(): Promise<DLChannelMeta[]> {
-  try {
-    const r = await fetch(LIST_URL, {
-      headers: { 'User-Agent': UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
-      signal:  AbortSignal.timeout(25_000),
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const html = await r.text();
-    const list = parseChannelList(html);
-    console.log(`[daddylive] scraped ${list.length} channels from DaddyLive`);
-    return list;
-  } catch (e) {
-    console.warn('[daddylive] channel list scrape failed:', (e as Error).message);
-    return [];
+  for (const listUrl of LIST_URLS) {
+    try {
+      const r = await fetch(listUrl, {
+        headers: { 'User-Agent': UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
+        signal:  AbortSignal.timeout(25_000),
+      });
+      if (!r.ok) continue;
+      const html = await r.text();
+      const list = parseChannelList(html);
+      if (list.length === 0) continue;
+      console.log(`[daddylive] scraped ${list.length} channels from ${listUrl}`);
+      return list;
+    } catch (e) {
+      console.warn(`[daddylive] ${listUrl} failed:`, (e as Error).message);
+    }
   }
+  console.warn('[daddylive] all mirror URLs failed');
+  return [];
 }
