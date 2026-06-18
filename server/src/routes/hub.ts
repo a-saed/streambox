@@ -6,6 +6,7 @@ import { HUB_CHANNELS, channelById, matchesChannel, type HubChannel } from '../s
 import { portalM3UChannels } from '../services/xtreamVerifier';
 import { getChannels, triggerPortalScrape } from '../cache';
 import type { VerifiedPortal } from '../types';
+import { addUrls, getBestUrl, getAliveChannelIds } from '../services/sportsPool';
 
 const router = Router();
 
@@ -42,8 +43,21 @@ router.get('/status', (_req, res) => {
   res.json({
     portalCount: portals.length,
     channelCount: getChannels().length,
+    liveCount: getAliveChannelIds().length,
     portals: portals.map(p => ({ id: p.id, name: p.name, streamCount: p.streamCount })),
   });
+});
+
+/** Returns all channel IDs that have at least one alive stream in the pool. */
+router.get('/live', (_req, res) => {
+  res.json({ liveChannelIds: getAliveChannelIds() });
+});
+
+/** Returns the best (first alive) stream URL for a given channel. */
+router.get('/:channelId/best', (req, res) => {
+  const best = getBestUrl(req.params.channelId);
+  if (!best) return res.status(404).json({ error: 'no live stream cached' });
+  res.json(best);
 });
 
 /** Trigger a fresh portal scrape (fire-and-forget). */
@@ -161,6 +175,7 @@ router.get('/:id/scan', async (req, res) => {
         if (alive) {
           hits++;
           send('hit', { url: c.url, streamName: c.streamName, portalName: c.portalName });
+          addUrls(channel.id, [{ url: c.url, source: 'xtream' }]);
         }
       })
     ));
