@@ -31,6 +31,9 @@ export async function getSharedBrowser(): Promise<Browser> {
         // race against inline scripts that read the real value first.
         '--disable-blink-features=AutomationControlled',
         '--exclude-switches=enable-automation',
+        // Allow video autoplay without user gesture — headless Chrome still gates
+        // autoplay by default which prevents HLS players from starting.
+        '--autoplay-policy=no-user-gesture-required',
       ],
     });
     _browser.on('disconnected', () => { _browser = null; _launching = false; });

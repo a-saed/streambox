@@ -75,162 +75,161 @@ async function _staticParse(channelId: string): Promise<{ m3u8Url: string; refer
   }
 }
 
-// ── Stage 2: Playwright HLS interception ──────────────────────────────────────
-// Navigate the page inside a stealth-patched headless Chromium and intercept
-// the first m3u8 request.  We do NOT block lolo.js — with
-// --disable-blink-features=AutomationControlled in the browser launch args,
-// navigator.webdriver is false at the C++ level and lolo.js sees a real browser,
-// passes its check, and triggers the player normally.
+// ── Stage 2: Playwright — JS context extraction ───────────────────────────────
+// The dyngutter player uses SwarmCloud P2P HLS which routes segment/manifest
+// fetches through a web worker — those requests are invisible to Playwright's
+// ctx.on('request').  Instead we:
+//  1. Let the page load and trigger the player (click gate)
+//  2. Wait for stream.js to decode _econfig and configure Clappr
+//  3. Read the m3u8 URL directly from the Clappr player object in the iframe's
+//     JS context — it must be in memory since the player is initialised with it
+//  4. Also sniff any m3u8 that appears via HTTP (rare but covers edge cases)
 // ─────────────────────────────────────────────────────────────────────────────
+
+const _STEALTH_SCRIPT = `
+  window.chrome = {
+    runtime: { id: undefined, connect: () => {}, sendMessage: () => {} },
+    loadTimes: () => ({}), csi: () => ({}), app: { isInstalled: false },
+  };
+  const _pl = [
+    { name: 'Chrome PDF Plugin',  filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+    { name: 'Chrome PDF Viewer',  filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+    { name: 'Native Client',      filename: 'internal-nacl-plugin', description: '' },
+  ];
+  Object.defineProperty(navigator, 'plugins', {
+    get: () => Object.assign(_pl, { item: (i) => _pl[i] ?? null, namedItem: (n) => _pl.find(p => p.name === n) ?? null, refresh: () => {} }),
+  });
+  Object.defineProperty(navigator, 'languages',           { get: () => ['en-US', 'en'] });
+  Object.defineProperty(navigator, 'platform',            { get: () => 'Win32' });
+  Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+  try {
+    const _b = [{ brand:'Google Chrome',version:'124'},{ brand:'Chromium',version:'124'},{ brand:'Not-A.Brand',version:'99'}];
+    Object.defineProperty(navigator, 'userAgentData', {
+      get: () => ({ brands:_b, mobile:false, platform:'Windows',
+        getHighEntropyValues: () => Promise.resolve({ brands:_b, mobile:false, platform:'Windows', platformVersion:'10.0.0', architecture:'x86', bitness:'64', model:'', uaFullVersion:'124.0.0.0' }),
+        toJSON: () => ({ brands:_b, mobile:false, platform:'Windows' }) }),
+      configurable: true,
+    });
+  } catch(_) {}
+  const _oq = navigator.permissions?.query?.bind(navigator.permissions);
+  if (_oq) navigator.permissions.query = (p) =>
+    p.name==='notifications'
+      ? Promise.resolve(Object.assign(Object.create(PermissionStatus.prototype),{state:'default',onchange:null}))
+      : _oq(p);
+  Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+  Object.defineProperty(document, 'hidden',          { get: () => false });
+  Object.defineProperty(window,   'outerWidth',      { get: () => 1280 });
+  Object.defineProperty(window,   'outerHeight',     { get: () => 720 });
+  navigator.getBattery = () => Promise.resolve({ charging:true, chargingTime:0, dischargingTime:Infinity, level:1, addEventListener:()=>{}, removeEventListener:()=>{} });
+  Object.defineProperty(window, 'devtoolsDetector', { get:()=>undefined, set:()=>{} });
+`;
+
+// Read m3u8 from the Clappr player object or <video> element inside the dyngutter iframe.
+// SwarmCloud P2P uses web workers for fetching so the URL never appears in ctx.on('request'),
+// but stream.js must configure Clappr with the raw URL before handing it to SwarmCloud.
+async function _extractFromPlayerContext(page: import('playwright').Page): Promise<string | null> {
+  for (const frame of page.frames()) {
+    if (!frame.url().includes('dyngutter.net') && !frame.url().includes('sporttsonline')) continue;
+    try {
+      // Evaluated inside the browser frame — TypeScript can't resolve DOM globals here.
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const url: string | null = await frame.evaluate(`(function(){
+        var w = globalThis;
+        var keys = ['player','Player','_player','clappr','_clappr'];
+        for (var i = 0; i < keys.length; i++) {
+          var p = w[keys[i]];
+          if (!p) continue;
+          var src = (p.options && (p.options.source || (p.options.sources && p.options.sources[0] && p.options.sources[0].src))) || (p._options && p._options.source);
+          if (typeof src === 'string' && src.indexOf('.m3u8') !== -1) return src;
+        }
+        var v = document.querySelector('video');
+        if (v && v.currentSrc && v.currentSrc.indexOf('.m3u8') !== -1) return v.currentSrc;
+        if (v && v.src && v.src.indexOf('.m3u8') !== -1) return v.src;
+        return null;
+      })()`).catch(() => null) as string | null;
+      if (url) return url;
+    } catch { /* frame may not be accessible yet */ }
+  }
+  return null;
+}
+
 async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; referer: string } | null> {
   let ctx;
   const pageUrl = `${SPORTTSONLINE_BASE}/${channelId}.php`;
+  let dyngutterReferer = '';
+  let networkM3u8 = '';
+
   try {
     const browser = await getSharedBrowser();
     ctx = await browser.newContext({
       userAgent: UA,
       viewport: { width: 1280, height: 720 },
       ignoreHTTPSErrors: true,
-      // ⚠️  Do NOT set extraHTTPHeaders with a hardcoded Referer here.
-      // Playwright applies extraHTTPHeaders to EVERY request in the context,
-      // including iframe navigation requests.  The dyngutter.net player iframe
-      // is domain-protected: it checks that the HTTP Referer comes from
-      // *.sporttsonline.click.  When we override Referer globally it sends
-      // prabashsapkota.github.io instead and dyngutter returns "Not allowed".
-      // Without extraHTTPHeaders the browser sets Referer automatically to the
-      // parent page (sporttsonline.click), which passes dyngutter's check.
+      // ⚠️ NO extraHTTPHeaders — Playwright applies them to ALL requests including
+      // iframe navigations.  dyngutter.net domain-checks Referer and requires it
+      // to be *.sporttsonline.click.  Without this override the browser sets it
+      // correctly from the parent page navigation.
       ...makeProxyContextOptions(),
     });
 
-    // Block ad / fingerprinting endpoints that could phone home with bot scores
-    await ctx.route(/\/(ads?|analytics|fingerprint|captcha|challenge|turnstile)\b/i,
-      route => route.abort());
+    await ctx.addInitScript(_STEALTH_SCRIPT);
+
+    // Sniff any m3u8 that appears via HTTP (covers cases where P2P is disabled/slow)
+    ctx.on('request', (req: import('playwright').Request) => {
+      const url = req.url();
+      const type = req.resourceType();
+      if (!['image', 'font', 'stylesheet', 'other'].includes(type)) {
+        console.log(`[bintv:req] ${type.padEnd(10)} ${url.slice(0, 110)}`);
+      }
+      if (!dyngutterReferer && url.includes('.dyngutter.net')) {
+        try { dyngutterReferer = new URL(url).origin + '/'; } catch { /* ignore */ }
+      }
+      if (url.includes('.m3u8') && !url.includes('sporttsonline')) {
+        networkM3u8 = url;
+        console.log(`[bintv] ${channelId}: m3u8 via network → ${url.slice(0, 100)}`);
+      }
+    });
 
     const page = await ctx.newPage();
 
-    // Stealth patches — browser.ts already adds --disable-blink-features=AutomationControlled
-    // which handles navigator.webdriver at the C++ level.  These patches cover the
-    // remaining JS-accessible properties that headless Chrome exposes differently.
-    await ctx.addInitScript(`
-      // chrome runtime (absent in headless)
-      window.chrome = {
-        runtime: { id: undefined, connect: () => {}, sendMessage: () => {} },
-        loadTimes: () => ({}), csi: () => ({}), app: { isInstalled: false },
-      };
+    console.log(`[bintv] ${channelId}: navigating…`);
+    await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 25_000 })
+      .catch((e: Error) => console.warn(`[bintv] goto: ${e.message}`));
 
-      // Plugins — empty length is a headless giveaway
-      const _pl = [
-        { name: 'Chrome PDF Plugin',  filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-        { name: 'Chrome PDF Viewer',  filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-        { name: 'Native Client',      filename: 'internal-nacl-plugin', description: '' },
-      ];
-      Object.defineProperty(navigator, 'plugins', {
-        get: () => Object.assign(_pl, { item: (i) => _pl[i] ?? null, namedItem: (n) => _pl.find(p => p.name === n) ?? null, refresh: () => {} }),
-      });
+    // First click: triggers the ad-gated "click to show player" mechanism
+    console.log(`[bintv] ${channelId}: click 1 (player gate)`);
+    await page.mouse.click(640, 360).catch(() => {});
 
-      Object.defineProperty(navigator, 'languages',          { get: () => ['en-US', 'en'] });
-      Object.defineProperty(navigator, 'platform',           { get: () => 'Win32' });
-      Object.defineProperty(navigator, 'hardwareConcurrency',{ get: () => 8 });
+    // Wait for Clappr + stream.js to load and decode _econfig
+    // stream.js appears ~3-4s after the click in the logs
+    await page.waitForRequest(req => req.url().includes('clappr'), { timeout: 12_000 })
+      .catch(() => {});
+    await new Promise(r => setTimeout(r, 3_000));
 
-      // Client Hints (navigator.userAgentData) — headless Chromium exposes
-      // "HeadlessChrome" in the brands list, which third-party tracker scripts
-      // (crwdcntrl, adexchangerapid) read and leak into their request URLs.
-      // Although dyngutter's own check is Referer-based (not UA-data-based), we
-      // spoof this defensively so fingerprinting scripts don't identify the bot.
-      try {
-        const _brands = [
-          { brand: 'Google Chrome', version: '124' },
-          { brand: 'Chromium',      version: '124' },
-          { brand: 'Not-A.Brand',   version: '99'  },
-        ];
-        const _fullBrands = [
-          { brand: 'Google Chrome', version: '124.0.0.0' },
-          { brand: 'Chromium',      version: '124.0.0.0' },
-          { brand: 'Not-A.Brand',   version: '99.0.0.0'  },
-        ];
-        Object.defineProperty(navigator, 'userAgentData', {
-          get: () => ({
-            brands: _brands, mobile: false, platform: 'Windows',
-            getHighEntropyValues: () => Promise.resolve({
-              brands: _brands, fullVersionList: _fullBrands,
-              mobile: false, platform: 'Windows', platformVersion: '10.0.0',
-              architecture: 'x86', bitness: '64', model: '', uaFullVersion: '124.0.0.0',
-            }),
-            toJSON: () => ({ brands: _brands, mobile: false, platform: 'Windows' }),
-          }),
-          configurable: true,
-        });
-      } catch (_) { /* property may already exist on some Chromium builds */ }
+    // If we already have it from network, use it
+    if (networkM3u8) return { m3u8Url: networkM3u8, referer: dyngutterReferer || pageUrl };
 
-      // Permissions — headless lacks notification context
-      const _oq = navigator.permissions?.query?.bind(navigator.permissions);
-      if (_oq) {
-        navigator.permissions.query = (p) =>
-          p.name === 'notifications'
-            ? Promise.resolve(Object.assign(Object.create(PermissionStatus.prototype), { state: 'default', onchange: null }))
-            : _oq(p);
-      }
+    // Try to read from player JS context (primary path for SwarmCloud P2P sites)
+    let m3u8 = await _extractFromPlayerContext(page);
+    if (m3u8) {
+      console.log(`[bintv] ${channelId}: extracted from player JS → ${m3u8.slice(0, 100)}`);
+      return { m3u8Url: m3u8, referer: dyngutterReferer || pageUrl };
+    }
 
-      // Tab visibility — player may refuse to start in a hidden tab
-      Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
-      Object.defineProperty(document, 'hidden',          { get: () => false });
+    // Second click: in case player rendered a "click to play" button
+    console.log(`[bintv] ${channelId}: click 2 (play button)`);
+    await page.mouse.click(640, 360).catch(() => {});
+    await new Promise(r => setTimeout(r, 4_000));
 
-      Object.defineProperty(window, 'outerWidth',  { get: () => 1280 });
-      Object.defineProperty(window, 'outerHeight', { get: () => 720 });
+    if (networkM3u8) return { m3u8Url: networkM3u8, referer: dyngutterReferer || pageUrl };
+    m3u8 = await _extractFromPlayerContext(page);
+    if (m3u8) {
+      console.log(`[bintv] ${channelId}: extracted from player JS (2nd) → ${m3u8.slice(0, 100)}`);
+      return { m3u8Url: m3u8, referer: dyngutterReferer || pageUrl };
+    }
 
-      navigator.getBattery = () => Promise.resolve({ charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1, addEventListener: () => {}, removeEventListener: () => {} });
-
-      Object.defineProperty(window, 'devtoolsDetector', { get: () => undefined, set: () => {} });
-    `);
-
-    const result = await new Promise<{ m3u8Url: string; referer: string } | null>((resolve) => {
-      const timer = setTimeout(() => {
-        console.warn(`[bintv] ${channelId}: 35s timeout — no m3u8 intercepted`);
-        resolve(null);
-      }, 35_000);
-      let dyngutterReferer = '';
-
-      ctx!.on('request', (req: import('playwright').Request) => {
-        const url = req.url();
-        const type = req.resourceType();
-        // Log all non-trivial requests so we can trace the flow in server logs
-        if (!['image', 'font', 'stylesheet', 'other'].includes(type)) {
-          console.log(`[bintv:req] ${type.padEnd(10)} ${url.slice(0, 110)}`);
-        }
-        if (!dyngutterReferer && url.includes('.dyngutter.net')) {
-          try { dyngutterReferer = new URL(url).origin + '/'; } catch { /* ignore */ }
-          console.log(`[bintv] ${channelId}: dyngutter referer = ${dyngutterReferer}`);
-        }
-        if (url.includes('.m3u8') && !url.includes('sporttsonline')) {
-          clearTimeout(timer);
-          console.log(`[bintv] ${channelId}: M3U8 intercepted → ${url.slice(0, 100)}`);
-          resolve({ m3u8Url: url, referer: dyngutterReferer || pageUrl });
-        }
-      });
-
-      ctx!.on('requestfailed', (req: import('playwright').Request) => {
-        const url = req.url();
-        if (!['image', 'font', 'stylesheet'].includes(req.resourceType())) {
-          console.warn(`[bintv:fail] ${url.slice(0, 100)} — ${req.failure()?.errorText}`);
-        }
-      });
-
-      ctx!.on('response', (resp: import('playwright').Response) => {
-        const status = resp.status();
-        if (status >= 400) {
-          console.warn(`[bintv:${status}] ${resp.url().slice(0, 100)}`);
-        }
-      });
-
-      page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 25_000 })
-        .then(async () => {
-          console.log(`[bintv] ${channelId}: page loaded — clicking`);
-          await page.mouse.click(300, 300).catch(() => {});
-        })
-        .catch((e: Error) => console.warn(`[bintv] ${channelId}: goto error — ${e.message}`));
-    });
-
-    return result;
+    console.warn(`[bintv] ${channelId}: all extraction methods failed`);
+    return null;
   } catch (e) {
     console.warn('[bintv] Playwright error:', (e as Error).message);
     return null;
