@@ -91,7 +91,14 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
       userAgent: UA,
       viewport: { width: 1280, height: 720 },
       ignoreHTTPSErrors: true,
-      extraHTTPHeaders: { 'Referer': 'https://prabashsapkota.github.io/' },
+      // ⚠️  Do NOT set extraHTTPHeaders with a hardcoded Referer here.
+      // Playwright applies extraHTTPHeaders to EVERY request in the context,
+      // including iframe navigation requests.  The dyngutter.net player iframe
+      // is domain-protected: it checks that the HTTP Referer comes from
+      // *.sporttsonline.click.  When we override Referer globally it sends
+      // prabashsapkota.github.io instead and dyngutter returns "Not allowed".
+      // Without extraHTTPHeaders the browser sets Referer automatically to the
+      // parent page (sporttsonline.click), which passes dyngutter's check.
       ...makeProxyContextOptions(),
     });
 
@@ -104,7 +111,7 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
     // Stealth patches — browser.ts already adds --disable-blink-features=AutomationControlled
     // which handles navigator.webdriver at the C++ level.  These patches cover the
     // remaining JS-accessible properties that headless Chrome exposes differently.
-    await page.addInitScript(`
+    await ctx.addInitScript(`
       // chrome runtime (absent in headless)
       window.chrome = {
         runtime: { id: undefined, connect: () => {}, sendMessage: () => {} },
@@ -124,6 +131,36 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
       Object.defineProperty(navigator, 'languages',          { get: () => ['en-US', 'en'] });
       Object.defineProperty(navigator, 'platform',           { get: () => 'Win32' });
       Object.defineProperty(navigator, 'hardwareConcurrency',{ get: () => 8 });
+
+      // Client Hints (navigator.userAgentData) — headless Chromium exposes
+      // "HeadlessChrome" in the brands list, which third-party tracker scripts
+      // (crwdcntrl, adexchangerapid) read and leak into their request URLs.
+      // Although dyngutter's own check is Referer-based (not UA-data-based), we
+      // spoof this defensively so fingerprinting scripts don't identify the bot.
+      try {
+        const _brands = [
+          { brand: 'Google Chrome', version: '124' },
+          { brand: 'Chromium',      version: '124' },
+          { brand: 'Not-A.Brand',   version: '99'  },
+        ];
+        const _fullBrands = [
+          { brand: 'Google Chrome', version: '124.0.0.0' },
+          { brand: 'Chromium',      version: '124.0.0.0' },
+          { brand: 'Not-A.Brand',   version: '99.0.0.0'  },
+        ];
+        Object.defineProperty(navigator, 'userAgentData', {
+          get: () => ({
+            brands: _brands, mobile: false, platform: 'Windows',
+            getHighEntropyValues: () => Promise.resolve({
+              brands: _brands, fullVersionList: _fullBrands,
+              mobile: false, platform: 'Windows', platformVersion: '10.0.0',
+              architecture: 'x86', bitness: '64', model: '', uaFullVersion: '124.0.0.0',
+            }),
+            toJSON: () => ({ brands: _brands, mobile: false, platform: 'Windows' }),
+          }),
+          configurable: true,
+        });
+      } catch (_) { /* property may already exist on some Chromium builds */ }
 
       // Permissions — headless lacks notification context
       const _oq = navigator.permissions?.query?.bind(navigator.permissions);
