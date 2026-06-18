@@ -34,11 +34,12 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
 
     const page = await ctx.newPage();
 
-    // Spoof visibility so auto-play streams start without a user gesture
-    await page.addInitScript(() => {
+    // Spoof visibility so auto-play streams start without a user gesture.
+    // Passed as a string so TypeScript doesn't check browser-only globals.
+    await page.addInitScript(`
       Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
       Object.defineProperty(document, 'hidden', { get: () => false });
-    });
+    `);
 
     const result = await new Promise<{ m3u8Url: string; referer: string } | null>((resolve) => {
       const timer = setTimeout(() => resolve(null), 35_000);
