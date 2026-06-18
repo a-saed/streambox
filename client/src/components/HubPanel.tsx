@@ -6,6 +6,7 @@ import {
   fetchSourceChannels,
   discoverPortals,
   scanHubChannel,
+  API_BASE,
   type HubChannel,
   type HubStatus,
 } from '../lib/api';
@@ -79,9 +80,10 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
   const setSidebarOpen   = useStore(s => s.setSidebarOpen);
   const activeChannel    = useStore(s => s.activeChannel);
 
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [loading, setLoading]   = useState(true);
-  const [query, setQuery]       = useState('');
+  const [channels, setChannels]       = useState<Channel[]>([]);
+  const [loading, setLoading]         = useState(true);
+  const [query, setQuery]             = useState('');
+  const [warmingId, setWarmingId]     = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,7 +91,6 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
       const chs = await fetchSourceChannels(source);
       if (cancelled) return;
       if (chs.length === 0 && attempt < 4) {
-        // Server may still be initialising — retry with backoff
         setTimeout(() => load(attempt + 1), 1500 * (attempt + 1));
         return;
       }
@@ -100,7 +101,17 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
     return () => { cancelled = true; };
   }, [source]);
 
-  function play(ch: Channel) {
+  async function play(ch: Channel) {
+    // bintv streams require Playwright interception which can take 20-30s on a
+    // cold fly.io machine. Pre-warm by fetching the manifest so the server caches
+    // the signed HLS URL; VideoPlayer then gets an instant cache hit.
+    if (ch.url.startsWith('/api/bintv/')) {
+      setWarmingId(ch.id);
+      try {
+        await fetch(`${API_BASE}${ch.url}`, { signal: AbortSignal.timeout(45_000) });
+      } catch { /* server will still serve from cache or VideoPlayer will retry */ }
+      setWarmingId(null);
+    }
     setActiveChannel({ ...ch });
     setSidebarOpen(false);
   }
@@ -173,23 +184,32 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
             )}
             <div className="space-y-1">
               {chs.map(ch => {
-                const isPlaying = activeChannel?.url === ch.url;
+                const isPlaying  = activeChannel?.url === ch.url;
+                const isWarming  = warmingId === ch.id;
                 return (
                   <button
                     key={ch.id}
                     onClick={() => play(ch)}
+                    disabled={warmingId !== null}
                     className={`w-full flex items-center gap-2 p-2 rounded-lg border transition-all group text-left
                       ${isPlaying
                         ? 'bg-indigo-600/20 border-indigo-500/50 ring-1 ring-indigo-500/30'
+                        : isWarming
+                        ? 'bg-amber-600/20 border-amber-500/40'
                         : 'bg-zinc-800/60 hover:bg-zinc-700/60 border-zinc-700/30 hover:border-zinc-600/50'
                       }`}
                   >
                     <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 transition-colors
-                      ${isPlaying ? 'bg-indigo-600/50' : 'bg-indigo-600/20 group-hover:bg-indigo-600/40'}`}>
-                      <Play size={9} className="text-indigo-400 fill-indigo-400" />
+                      ${isPlaying ? 'bg-indigo-600/50' : isWarming ? 'bg-amber-600/40' : 'bg-indigo-600/20 group-hover:bg-indigo-600/40'}`}>
+                      {isWarming
+                        ? <span className="w-2.5 h-2.5 border border-amber-400 border-t-transparent rounded-full animate-spin" />
+                        : <Play size={9} className="text-indigo-400 fill-indigo-400" />
+                      }
                     </div>
                     <span className="flex-1 text-[11px] text-zinc-200 truncate">{ch.name}</span>
-                    {isPlaying
+                    {isWarming
+                      ? <span className="text-[9px] text-amber-400 flex-shrink-0">connecting…</span>
+                      : isPlaying
                       ? <span className="flex items-center gap-1 text-[9px] font-semibold text-indigo-400 flex-shrink-0">
                           <span className="w-1 h-1 rounded-full bg-indigo-400 animate-pulse" />LIVE
                         </span>
