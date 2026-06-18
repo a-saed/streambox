@@ -10,6 +10,10 @@ import {
 import { buildChannelsFromPortal, scrapeAndVerify } from './services/xtreamVerifier';
 import { scrapeDaddyliveChannels, type DLChannelMeta } from './services/daddyliveSource';
 import { checkChannelLive } from './services/daddyliveSignedUrl';
+import { initSportsPool } from './services/sportsPool';
+import { mapDLChannelsToPool } from './services/dlChannelMapper';
+import { loadBeInM3uSources, startBeInM3uRefresh } from './services/beInM3uSource';
+import { startTelegramSource } from './services/telegramSource';
 
 const DEFAULT_M3U_URLS = [
   'https://iptv-org.github.io/iptv/index.m3u',
@@ -412,6 +416,11 @@ async function _runDLRefresh(): Promise<void> {
 
     const liveCount = _channels.filter(c => _isDlUrl(c.url)).length;
     console.log(`[cache] DaddyLive: refresh done — ${liveCount} live in pool`);
+
+    const liveDLChannels = _channels
+      .filter(c => _isDlUrl(c.url))
+      .map(c => ({ name: c.name, url: c.url }));
+    mapDLChannelsToPool(liveDLChannels);
   } finally {
     _dlVerifyRunning = false;
   }
@@ -482,6 +491,7 @@ async function _loadBintvChannels(): Promise<void> {
 
 export async function initCache(): Promise<void> {
   initDb();
+  initSportsPool();
 
   // Prune excess portals from the same server before loading — prevents one host
   // (e.g. 35+ xc.adultiptv.net accounts) from consuming all portal slots.
@@ -505,6 +515,10 @@ export async function initCache(): Promise<void> {
   setInterval(() => _loadBintvChannels().catch(console.error), BINTV_REFRESH_MS).unref();
 
   const workingPortals = await _loadPortalChannels();
+
+  loadBeInM3uSources().catch(console.error);
+  startBeInM3uRefresh();
+  startTelegramSource();
 
   await _loadEpg().catch(() => {});
 
