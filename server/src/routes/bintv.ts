@@ -4,7 +4,8 @@ import { getSharedBrowser, makeProxyContextOptions } from '../services/browser';
 const router = Router();
 
 const SPORTTSONLINE_BASE = 'https://ww2.sporttsonline.click/channels/hd';
-const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+// Windows UA — Linux + headless Chromium is a strong automation signal
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 // Signed m3u8 URLs from 15072669.net expire in ~5-6h; cache for 4h
 const CACHE_TTL_MS = 4 * 60 * 60 * 1000;
@@ -33,15 +34,28 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
       ...makeProxyContextOptions(),
     });
 
+    // Block the rotating daily anti-bot JS (lolo_YYYYMMDD_NN.js) before it runs.
+    // The script detects Playwright via webdriver, chrome object, and timing heuristics.
+    // Intercepting it at context level catches it even when loaded from iframes.
+    await ctx.route('**/lolo_*.js', route => route.fulfill({
+      status: 200,
+      contentType: 'application/javascript; charset=utf-8',
+      body: '',
+    }));
+
+    // Also block common ad/fingerprinting networks that phone home with bot scores.
+    await ctx.route(/\/(ads?|analytics|fingerprint|captcha|challenge|turnstile)\b/i,
+      route => route.abort());
+
     const page = await ctx.newPage();
 
-    // Stealth patches — stream.js has devtools/automation detection.
-    // These run before any page script so the environment looks like a real browser.
+    // Stealth patches — run before any page script so the environment looks like
+    // a real Windows Chrome browser.
     await page.addInitScript(`
-      // Remove webdriver flag (most common automation detector)
+      // 1. Remove webdriver flag
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 
-      // Add chrome runtime object (absent in headless, detected by many scripts)
+      // 2. chrome runtime (absent in headless)
       window.chrome = {
         runtime: { id: undefined, connect: () => {}, sendMessage: () => {} },
         loadTimes: () => ({}),
@@ -49,22 +63,51 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
         app: { isInstalled: false },
       };
 
-      // Fake plugins so navigator.plugins.length > 0
+      // 3. Plugins — empty length is a headless giveaway
+      const _plugins = [
+        { name: 'Chrome PDF Plugin',         filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+        { name: 'Chrome PDF Viewer',          filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+        { name: 'Native Client',             filename: 'internal-nacl-plugin', description: '' },
+      ];
       Object.defineProperty(navigator, 'plugins', {
-        get: () => Object.assign([{ name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: '' }], { item: () => null, namedItem: () => null, refresh: () => {} }),
+        get: () => Object.assign(_plugins, { item: (i) => _plugins[i] ?? null, namedItem: (n) => _plugins.find(p => p.name === n) ?? null, refresh: () => {} }),
+      });
+      Object.defineProperty(navigator, 'mimeTypes', {
+        get: () => Object.assign([], { item: () => null, namedItem: () => null }),
       });
 
-      // Realistic languages
+      // 4. Language / platform
       Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+      Object.defineProperty(navigator, 'platform',  { get: () => 'Win32' });
 
-      // Visibility: streams may not start when tab is 'hidden'
+      // 5. Hardware concurrency (headless often reports 2)
+      Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+
+      // 6. Permissions — headless lacks notification permission context
+      const _origPermQuery = navigator.permissions?.query?.bind(navigator.permissions);
+      if (_origPermQuery) {
+        navigator.permissions.query = (params) =>
+          params.name === 'notifications'
+            ? Promise.resolve(Object.assign(Object.create(PermissionStatus.prototype), { state: 'default', onchange: null }))
+            : _origPermQuery(params);
+      }
+
+      // 7. Visibility — streams may not start in a 'hidden' tab
       Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
       Object.defineProperty(document, 'hidden',          { get: () => false });
 
-      // Suppress devtools detector (runs via window.devtoolsDetector)
+      // 8. Window size — headless defaults to 800×600
+      Object.defineProperty(window, 'outerWidth',  { get: () => 1280 });
+      Object.defineProperty(window, 'outerHeight', { get: () => 720 });
+
+      // 9. Battery — absence triggers detection in some scripts
+      navigator.getBattery = () => Promise.resolve({ charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1, addEventListener: () => {}, removeEventListener: () => {} });
+
+      // 10. Devtools detector suppression
       Object.defineProperty(window, 'devtoolsDetector', { get: () => undefined, set: () => {} });
     `);
 
+    const pageUrl = `${SPORTTSONLINE_BASE}/${channelId}.php`;
     const result = await new Promise<{ m3u8Url: string; referer: string } | null>((resolve) => {
       const timer = setTimeout(() => resolve(null), 35_000);
       let dyngutterReferer = '';
@@ -77,13 +120,15 @@ async function _interceptHLS(channelId: string): Promise<{ m3u8Url: string; refe
           try { dyngutterReferer = new URL(url).origin + '/'; } catch { /* ignore */ }
         }
 
-        if (url.includes('15072669.net') && url.includes('.m3u8')) {
+        // Match any m3u8 from 15072669.net or other streaming CDNs that aren't the site itself
+        if (url.includes('.m3u8') && !url.includes('sporttsonline')) {
           clearTimeout(timer);
-          resolve({ m3u8Url: url, referer: dyngutterReferer });
+          // Fall back to the page URL as referer if dyngutter subdomain wasn't seen yet
+          resolve({ m3u8Url: url, referer: dyngutterReferer || pageUrl });
         }
       });
 
-      page.goto(`${SPORTTSONLINE_BASE}/${channelId}.php`, {
+      page.goto(pageUrl, {
         waitUntil: 'domcontentloaded',
         timeout: 25_000,
       }).then(async () => {
@@ -113,8 +158,7 @@ async function _getStream(channelId: string): Promise<StreamEntry | null> {
     return null;
   }
   if (!hit.referer) {
-    console.warn(`[bintv] ${channelId}: no dyngutter referer captured`);
-    return null;
+    console.warn(`[bintv] ${channelId}: no referer captured, proceeding without`);
   }
 
   const entry: StreamEntry = { m3u8Url: hit.m3u8Url, referer: hit.referer, fetchedAt: Date.now() };
