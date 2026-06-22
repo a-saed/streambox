@@ -4,7 +4,8 @@ import { Sidebar } from './components/Sidebar';
 import { EPGStrip } from './components/EPGStrip';
 import { OverlayControls } from './components/OverlayControls';
 import { useStore } from './store/useStore';
-import { fetchChannels, fetchEPG, fetchHubLive } from './lib/api';
+import { fetchChannels, fetchEPG, fetchHubLive, onUnauthorized } from './lib/api';
+import { GateScreen } from './components/GateScreen';
 import { Satellite, WifiOff, RefreshCw } from 'lucide-react';
 
 function AppLoader() {
@@ -84,6 +85,7 @@ export default function App() {
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState(false);
   const [retryKey, setRetryKey]     = useState(0);
+  const [locked, setLocked]         = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -107,6 +109,10 @@ export default function App() {
   }, [setChannels, setEpg, retryKey]);
 
   useEffect(() => {
+    onUnauthorized(() => setLocked(true));
+  }, []);
+
+  useEffect(() => {
     fetchHubLive().then(setLiveHubChannelIds);
     const interval = setInterval(
       () => fetchHubLive().then(setLiveHubChannelIds),
@@ -115,6 +121,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [setLiveHubChannelIds]);
 
+  if (locked) return <GateScreen onUnlock={() => { setLocked(false); setRetryKey(k => k + 1); }} />;
   if (loading) return <AppLoader />;
   if (error) return <AppError onRetry={() => setRetryKey(k => k + 1)} />;
 
