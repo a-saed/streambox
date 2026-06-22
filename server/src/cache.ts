@@ -14,6 +14,7 @@ import { initSportsPool, markResult } from './services/sportsPool';
 import { mapDLChannelsToPool } from './services/dlChannelMapper';
 import { loadBeInM3uSources, startBeInM3uRefresh } from './services/beInM3uSource';
 import { startTelegramSource } from './services/telegramSource';
+import { parseBintvEvents } from './services/bintvSource';
 
 const DEFAULT_M3U_URLS = [
   'https://iptv-org.github.io/iptv/index.m3u',
@@ -441,50 +442,13 @@ const BINTV_REFRESH_MS = 2 * 60 * 60 * 1000; // 2h
 
 function _isBintvUrl(url: string) { return url.startsWith('/api/bintv/'); }
 
-function _langToCode(lang: string): string {
-  const l = lang.toLowerCase();
-  if (l.includes('arabic') || l.includes('arab')) return 'ara';
-  if (l.includes('french')) return 'fra';
-  if (l.includes('hindi')) return 'hin';
-  return 'eng';
-}
-
-function _parseBintvEvents(events: Record<string, unknown>[]): Channel[] {
-  const seen = new Set<string>();
-  const out: Channel[] = [];
-  for (const ev of events) {
-    const evName = String(ev['name'] ?? '');
-    const logo   = String(ev['logo'] ?? '');
-    for (const [key, val] of Object.entries(ev)) {
-      if (!key.startsWith('url_') || typeof val !== 'string') continue;
-      const m = val.match(/sporttsonline\.click\/channels\/hd\/(hd\d+)\.php/);
-      if (!m) continue;
-      const channelId = m[1];
-      if (seen.has(channelId)) continue;
-      seen.add(channelId);
-      const lang = key.replace('url_', '').replace(/\s*-\s*Stream\s*\d+$/, '').trim();
-      const id   = createHash('sha256').update(`bintv:${channelId}`).digest('hex').slice(0, 16);
-      out.push({
-        id,
-        name:     `${evName} (${lang})`,
-        logo,
-        url:      `/api/bintv/${channelId}`,
-        category: 'soccer',
-        country:  '',
-        language: _langToCode(lang),
-      });
-    }
-  }
-  return out;
-}
-
 async function _loadBintvChannels(): Promise<void> {
   try {
     const r = await fetch(BINTV_JSON_URL, { signal: AbortSignal.timeout(10_000) });
     if (!r.ok) return;
     const events = await r.json() as Record<string, unknown>[];
     if (!Array.isArray(events)) return;
-    const channels = _parseBintvEvents(events);
+    const channels = parseBintvEvents(events);
     if (!channels.length) return;
     _channels = _channels.filter(c => !_isBintvUrl(c.url));
     _mergeIn(channels);
