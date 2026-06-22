@@ -8,6 +8,8 @@ import portalsRouter from './routes/portals';
 import hubRouter from './routes/hub';
 import daddyliveRouter from './routes/daddylive';
 import bintvRouter from './routes/bintv';
+import authRoute from './routes/authRoute';
+import { authMiddleware } from './middleware/auth';
 
 export const app = express();
 
@@ -15,6 +17,12 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/health', (_, res) => res.json({ ok: true, uptime: process.uptime() }));
+
+// Public: passphrase verification (must be before the /api guard)
+app.use('/auth', authRoute);
+
+// Gate all API routes (no-op when ACCESS_CODE is unset)
+app.use('/api', authMiddleware);
 
 app.use('/api/channels', channelsRouter);
 app.use('/api/epg', epgRouter);
