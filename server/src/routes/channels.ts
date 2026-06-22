@@ -5,7 +5,6 @@ const router = Router();
 
 const SOURCE_PREFIXES: Record<string, string> = {
   daddylive: '/api/daddylive/',
-  bintv:     '/api/bintv/',
 };
 
 router.get('/', (req, res) => {

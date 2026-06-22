@@ -3,7 +3,7 @@ import {
   loadSportPoolEntries, deleteSportPoolEntry,
 } from './portalStore';
 
-export type PoolSource = 'daddylive' | 'xtream' | 'm3u' | 'telegram' | 'bintv';
+export type PoolSource = 'daddylive' | 'xtream' | 'm3u' | 'telegram';
 
 export interface PoolEntry {
   url: string;
@@ -79,7 +79,7 @@ function _isProxyUrl(url: string): boolean {
 function _evictDeadEntries(): void {
   for (const [channelId, entries] of _pool.entries()) {
     // Never evict internal proxy URLs — their lifecycle is managed by their own
-    // verify cycles (DL every 5-30 min, bintv every 2h), not the health checker.
+    // verify cycles (DL every 5-30 min), not the health checker.
     const keep = entries.filter(e => _isProxyUrl(e.url) || e.failCount < 2);
     entries
       .filter(e => !_isProxyUrl(e.url) && e.failCount >= 2)
@@ -102,9 +102,9 @@ async function _runHealthCheck(): Promise<void> {
   const now = Date.now();
   for (const entries of _pool.values()) {
     for (const entry of entries) {
-      // Internal proxy URLs (/api/daddylive/*, /api/bintv/*) are not direct HTTP
+      // Internal proxy URLs (/api/daddylive/*) are not direct HTTP
       // streams — fetching them would fail and falsely mark them dead. Their freshness
-      // is managed by the DL verify cycle and bintv refresh, not the health checker.
+      // is managed by the DL verify cycle, not the health checker.
       if (_isProxyUrl(entry.url)) continue;
       if (now - entry.lastChecked < SKIP_IF_CHECKED_WITHIN) continue;
       toCheck.push({ url: entry.url });

@@ -7,8 +7,6 @@ import {
   fetchSourceChannels,
   discoverPortals,
   scanHubChannel,
-  withToken,
-  API_BASE,
   type HubChannel,
   type HubStatus,
 } from '../lib/api';
@@ -46,7 +44,6 @@ const CATEGORY_ORDER = [
 
 const SOURCE_LABELS: Record<string, string> = {
   daddylive: 'DaddyLive',
-  bintv:     'bintv',
 };
 
 // Channels whose category grouping in the source panel we want to show nicely
@@ -85,8 +82,6 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
   const [channels, setChannels]       = useState<Channel[]>([]);
   const [loading, setLoading]         = useState(true);
   const [query, setQuery]             = useState('');
-  const [warmingId, setWarmingId]     = useState<string | null>(null);
-
   useEffect(() => {
     let cancelled = false;
     async function load(attempt = 0) {
@@ -104,18 +99,8 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
   }, [source]);
 
   function play(ch: Channel) {
-    // Open the player immediately — VideoPlayer drives its own loading state, so the
-    // click never blocks. bintv streams need Playwright interception (20s+ on a cold
-    // machine); we warm the server cache in the BACKGROUND and surface a per-channel
-    // "connecting…" hint, without freezing the UI or disabling other channels.
     setActiveChannel({ ...ch });
     setSidebarOpen(false);
-    if (ch.url.startsWith('/api/bintv/')) {
-      setWarmingId(ch.id);
-      fetch(withToken(`${API_BASE}${ch.url}`), { signal: AbortSignal.timeout(45_000) })
-        .catch(() => { /* VideoPlayer retries / cycles sources on its own */ })
-        .finally(() => setWarmingId(null));
-    }
   }
 
   const filtered = query.trim()
@@ -123,14 +108,12 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
         c.category.toLowerCase().includes(query.toLowerCase()))
     : channels;
 
-  // Group DaddyLive channels by category; bintv stays flat
-  const grouped = source === 'daddylive'
-    ? filtered.reduce<Record<string, Channel[]>>((acc, ch) => {
-        const key = ch.category || 'other';
-        (acc[key] ??= []).push(ch);
-        return acc;
-      }, {})
-    : { '': filtered };
+  // Group channels by category
+  const grouped = filtered.reduce<Record<string, Channel[]>>((acc, ch) => {
+    const key = ch.category || 'other';
+    (acc[key] ??= []).push(ch);
+    return acc;
+  }, {});
 
   return (
     <div className="flex flex-col h-full">
@@ -186,8 +169,7 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
             )}
             <div className="space-y-1">
               {chs.map(ch => {
-                const isPlaying  = activeChannel?.url === ch.url;
-                const isWarming  = warmingId === ch.id;
+                const isPlaying = activeChannel?.url === ch.url;
                 return (
                   <button
                     key={ch.id}
@@ -195,22 +177,15 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
                     className={`w-full flex items-center gap-2 p-2 rounded-lg border transition-all group text-left
                       ${isPlaying
                         ? 'bg-indigo-600/20 border-indigo-500/50 ring-1 ring-indigo-500/30'
-                        : isWarming
-                        ? 'bg-amber-600/20 border-amber-500/40'
                         : 'bg-zinc-800/60 hover:bg-zinc-700/60 border-zinc-700/30 hover:border-zinc-600/50'
                       }`}
                   >
                     <div className={`w-5 h-5 rounded flex items-center justify-center flex-shrink-0 transition-colors
-                      ${isPlaying ? 'bg-indigo-600/50' : isWarming ? 'bg-amber-600/40' : 'bg-indigo-600/20 group-hover:bg-indigo-600/40'}`}>
-                      {isWarming
-                        ? <span className="w-2.5 h-2.5 border border-amber-400 border-t-transparent rounded-full animate-spin" />
-                        : <Play size={9} className="text-indigo-400 fill-indigo-400" />
-                      }
+                      ${isPlaying ? 'bg-indigo-600/50' : 'bg-indigo-600/20 group-hover:bg-indigo-600/40'}`}>
+                      <Play size={9} className="text-indigo-400 fill-indigo-400" />
                     </div>
                     <span className="flex-1 text-[11px] text-zinc-200 truncate">{ch.name}</span>
-                    {isWarming
-                      ? <span className="text-[9px] text-amber-400 flex-shrink-0">connecting…</span>
-                      : isPlaying
+                    {isPlaying
                       ? <span className="flex items-center gap-1 text-[9px] font-semibold text-indigo-400 flex-shrink-0">
                           <span className="w-1 h-1 rounded-full bg-indigo-400 animate-pulse" />LIVE
                         </span>
@@ -402,7 +377,7 @@ interface HubPanelProps {
   onChannelSelect?: (ch: HubChannel) => void;
 }
 
-const SOURCES = ['daddylive', 'bintv'] as const;
+const SOURCES = ['daddylive'] as const;
 type SourceId = typeof SOURCES[number];
 
 export function HubPanel({ onChannelSelect }: HubPanelProps) {

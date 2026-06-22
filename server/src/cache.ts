@@ -14,7 +14,6 @@ import { initSportsPool, markResult } from './services/sportsPool';
 import { mapDLChannelsToPool } from './services/dlChannelMapper';
 import { loadBeInM3uSources, startBeInM3uRefresh } from './services/beInM3uSource';
 import { startTelegramSource } from './services/telegramSource';
-import { parseBintvEvents } from './services/bintvSource';
 
 const DEFAULT_M3U_URLS = [
   'https://iptv-org.github.io/iptv/index.m3u',
@@ -434,30 +433,6 @@ async function _runDLRefresh(): Promise<void> {
   }
 }
 
-// ── bintv.online live event channels ─────────────────────────────────────────
-// Each sporttsonline stream becomes a channel at /api/bintv/<channelId>
-
-const BINTV_JSON_URL  = 'https://prabashsapkota.github.io/bintvjson/index.json';
-const BINTV_REFRESH_MS = 2 * 60 * 60 * 1000; // 2h
-
-function _isBintvUrl(url: string) { return url.startsWith('/api/bintv/'); }
-
-async function _loadBintvChannels(): Promise<void> {
-  try {
-    const r = await fetch(BINTV_JSON_URL, { signal: AbortSignal.timeout(10_000) });
-    if (!r.ok) return;
-    const events = await r.json() as Record<string, unknown>[];
-    if (!Array.isArray(events)) return;
-    const channels = parseBintvEvents(events);
-    if (!channels.length) return;
-    _channels = _channels.filter(c => !_isBintvUrl(c.url));
-    _mergeIn(channels);
-    console.log(`[cache] bintv: ${channels.length} live event channel(s)`);
-  } catch (e) {
-    console.warn('[cache] bintv fetch failed:', (e as Error).message);
-  }
-}
-
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 export async function initCache(): Promise<void> {
@@ -474,16 +449,11 @@ export async function initCache(): Promise<void> {
   _loadDLFromDb();
   _runDLRefresh().catch(console.error);
 
-  // bintv and M3U load in parallel — both are fast HTTP fetches, independent of portals
-  const [m3uChannels] = await Promise.all([
-    _loadM3u().catch((): Channel[] => []),
-    _loadBintvChannels().catch(console.error),
-  ]);
+  // M3U load — fast HTTP fetch, independent of portals
+  const m3uChannels = await _loadM3u().catch((): Channel[] => []);
 
   _channels   = [..._channels, ...m3uChannels];
   _categories = [...new Set(_channels.map(c => c.category))].sort();
-
-  setInterval(() => _loadBintvChannels().catch(console.error), BINTV_REFRESH_MS).unref();
 
   const workingPortals = await _loadPortalChannels();
 

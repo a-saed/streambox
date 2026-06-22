@@ -7,7 +7,6 @@ import matchesRouter from './routes/matches';
 import portalsRouter from './routes/portals';
 import hubRouter from './routes/hub';
 import daddyliveRouter from './routes/daddylive';
-import bintvRouter from './routes/bintv';
 import authRoute from './routes/authRoute';
 import { authMiddleware } from './middleware/auth';
 
@@ -35,4 +34,3 @@ app.use('/api/matches', matchesRouter);
 app.use('/api/portals', portalsRouter);
 app.use('/api/hub', hubRouter);
 app.use('/api/daddylive', daddyliveRouter);
-app.use('/api/bintv', bintvRouter);
