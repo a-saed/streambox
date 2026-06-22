@@ -14,7 +14,10 @@ import { authMiddleware } from './middleware/auth';
 export const app = express();
 app.set('trust proxy', true);
 
-app.use(cors());
+// maxAge caches the CORS preflight (OPTIONS) for 24h so the browser doesn't
+// re-preflight every cross-origin request. Without it, the Authorization header
+// added by the access gate forces a preflight round-trip before each API call.
+app.use(cors({ maxAge: 86400 }));
 app.use(express.json());
 
 app.get('/health', (_, res) => res.json({ ok: true, uptime: process.uptime() }));

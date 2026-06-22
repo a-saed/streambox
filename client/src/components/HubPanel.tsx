@@ -103,19 +103,19 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
     return () => { cancelled = true; };
   }, [source]);
 
-  async function play(ch: Channel) {
-    // bintv streams require Playwright interception which can take 20-30s on a
-    // cold fly.io machine. Pre-warm by fetching the manifest so the server caches
-    // the signed HLS URL; VideoPlayer then gets an instant cache hit.
-    if (ch.url.startsWith('/api/bintv/')) {
-      setWarmingId(ch.id);
-      try {
-        await fetch(withToken(`${API_BASE}${ch.url}`), { signal: AbortSignal.timeout(45_000) });
-      } catch { /* server will still serve from cache or VideoPlayer will retry */ }
-      setWarmingId(null);
-    }
+  function play(ch: Channel) {
+    // Open the player immediately — VideoPlayer drives its own loading state, so the
+    // click never blocks. bintv streams need Playwright interception (20s+ on a cold
+    // machine); we warm the server cache in the BACKGROUND and surface a per-channel
+    // "connecting…" hint, without freezing the UI or disabling other channels.
     setActiveChannel({ ...ch });
     setSidebarOpen(false);
+    if (ch.url.startsWith('/api/bintv/')) {
+      setWarmingId(ch.id);
+      fetch(withToken(`${API_BASE}${ch.url}`), { signal: AbortSignal.timeout(45_000) })
+        .catch(() => { /* VideoPlayer retries / cycles sources on its own */ })
+        .finally(() => setWarmingId(null));
+    }
   }
 
   const filtered = query.trim()
@@ -192,7 +192,6 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
                   <button
                     key={ch.id}
                     onClick={() => play(ch)}
-                    disabled={warmingId !== null}
                     className={`w-full flex items-center gap-2 p-2 rounded-lg border transition-all group text-left
                       ${isPlaying
                         ? 'bg-indigo-600/20 border-indigo-500/50 ring-1 ring-indigo-500/30'
