@@ -212,9 +212,10 @@ router.get('/:id', async (req: Request, res: Response) => {
   // fail gracefully if the browser truly can't decode the codec.
   const strippedPlaylist = playlistText.replace(/,?CODECS="[^"]*"/g, '');
 
+  const authToken = typeof req.query.token === 'string' ? req.query.token : undefined;
   res.set('Content-Type', 'application/vnd.apple.mpegurl');
   res.set('Cache-Control', 'no-store');
-  return res.send(rewriteM3U8(strippedPlaylist, signedUrl!, signedUrl!));
+  return res.send(rewriteM3U8(strippedPlaylist, signedUrl!, signedUrl!, authToken));
 });
 
 export default router;

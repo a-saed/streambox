@@ -7,6 +7,7 @@ import {
   fetchSourceChannels,
   discoverPortals,
   scanHubChannel,
+  withToken,
   API_BASE,
   type HubChannel,
   type HubStatus,
@@ -109,7 +110,7 @@ function SourcePanel({ source, onBack }: SourcePanelProps) {
     if (ch.url.startsWith('/api/bintv/')) {
       setWarmingId(ch.id);
       try {
-        await fetch(`${API_BASE}${ch.url}`, { signal: AbortSignal.timeout(45_000) });
+        await fetch(withToken(`${API_BASE}${ch.url}`), { signal: AbortSignal.timeout(45_000) });
       } catch { /* server will still serve from cache or VideoPlayer will retry */ }
       setWarmingId(null);
     }

@@ -210,11 +210,13 @@ router.get('/:token', async (req: Request, res: Response) => {
   const baseUrl   = new URL(liveEntry.m3u8Url);
   const baseDir   = baseUrl.origin + baseUrl.pathname.replace(/\/[^/]*$/, '/');
   const ref       = encodeURIComponent(liveEntry.referer);
+  const authToken = typeof req.query.token === 'string' ? req.query.token : '';
 
   const rewritten = text.replace(/^(?!#)(\S+)$/gm, (line) => {
     if (!line.trim()) return line;
     const absolute = line.startsWith('http') ? line : `${baseDir}${line}`;
-    return `/api/bintv/proxy?url=${encodeURIComponent(absolute)}&ref=${ref}`;
+    const proxyUrl = `/api/bintv/proxy?url=${encodeURIComponent(absolute)}&ref=${ref}`;
+    return authToken ? `${proxyUrl}&token=${encodeURIComponent(authToken)}` : proxyUrl;
   });
 
   res.set('Content-Type', 'application/vnd.apple.mpegurl');

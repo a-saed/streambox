@@ -12,6 +12,7 @@ import authRoute from './routes/authRoute';
 import { authMiddleware } from './middleware/auth';
 
 export const app = express();
+app.set('trust proxy', true);
 
 app.use(cors());
 app.use(express.json());

@@ -49,13 +49,14 @@ function isPlaylist(url: string, ct: string): boolean {
     ct.includes('mpegurl') || ct.includes('x-mpegurl');
 }
 
-export function rewriteM3U8(text: string, baseUrl: string, rootUrl?: string): string {
+export function rewriteM3U8(text: string, baseUrl: string, rootUrl?: string, authToken?: string): string {
   const base = new URL(baseUrl);
   const root = rootUrl ?? baseUrl;
   function proxy(uri: string): string {
     try {
       const absolute = new URL(uri, base).toString();
-      return `/api/stream?url=${encodeURIComponent(absolute)}&_root=${encodeURIComponent(root)}`;
+      const base64 = `/api/stream?url=${encodeURIComponent(absolute)}&_root=${encodeURIComponent(root)}`;
+      return authToken ? `${base64}&token=${encodeURIComponent(authToken)}` : base64;
     } catch { return uri; }
   }
   return text.split('\n').map(line => {
@@ -127,8 +128,9 @@ const FAKE_SEGMENT_MIMES = new Set([
 const router = Router();
 
 router.get('/', async (req: Request, res: Response) => {
-  const url     = typeof req.query.url     === 'string' ? req.query.url     : undefined;
-  const rootUrl = typeof req.query._root   === 'string' ? req.query._root   : undefined;
+  const url       = typeof req.query.url     === 'string' ? req.query.url     : undefined;
+  const rootUrl   = typeof req.query._root   === 'string' ? req.query._root   : undefined;
+  const authToken = typeof req.query.token   === 'string' ? req.query.token   : undefined;
 
   if (!url) return res.status(400).json({ error: 'url query param required' });
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
@@ -194,7 +196,7 @@ router.get('/', async (req: Request, res: Response) => {
       const text = Buffer.concat(chunks).toString('utf-8');
       res.set('Content-Type', 'application/vnd.apple.mpegurl');
       res.set('Cache-Control', 'no-store');
-      return res.send(rewriteM3U8(text, finalUrl, rootUrl ?? url));
+      return res.send(rewriteM3U8(text, finalUrl, rootUrl ?? url, authToken));
     }
 
     // Peek for playlists served with wrong/no content-type.
@@ -222,7 +224,7 @@ router.get('/', async (req: Request, res: Response) => {
         const text = Buffer.concat(rest).toString('utf-8');
         res.set('Content-Type', 'application/vnd.apple.mpegurl');
         res.set('Cache-Control', 'no-cache');
-        return res.send(rewriteM3U8(text, finalUrl, rootUrl ?? url));
+        return res.send(rewriteM3U8(text, finalUrl, rootUrl ?? url, authToken));
       }
 
       // Not a playlist — write the peeked chunk then pipe the rest as binary
