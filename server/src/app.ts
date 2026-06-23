@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import channelsRouter from './routes/channels';
 import epgRouter from './routes/epg';
 import streamRouter from './routes/stream';
@@ -17,6 +18,9 @@ app.set('trust proxy', true);
 // re-preflight every cross-origin request. Without it, the Authorization header
 // added by the access gate forces a preflight round-trip before each API call.
 app.use(cors({ maxAge: 86400 }));
+// gzip/brotli all responses — the channel catalog is large, repetitive JSON that
+// compresses ~10-20x, which dominates load time on cross-origin clients.
+app.use(compression());
 app.use(express.json());
 
 app.get('/health', (_, res) => res.json({ ok: true, uptime: process.uptime() }));
